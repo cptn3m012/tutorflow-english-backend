@@ -324,6 +324,10 @@ http://127.0.0.1:8000/docs
 
 The backend is ready for local lesson generation and PDF export. Before production deployment, configure environment-specific values such as allowed CORS origins, Ollama model settings, and any optional image provider credentials.
 
+## Acknowledgements
+
+This project was created with assistance from OpenAI Codex.
+
 ## License
 
 This project is licensed under the MIT License.
