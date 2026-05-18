@@ -1,0 +1,176 @@
+GET http://127.0.0.1:8000/
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/lessons/cefr-levels
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/lessons/cefr-levels/A2
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/lessons/advanced-options
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/lessons/pdf-options
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/lessons/generate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "level": "A2",
+  "duration": 30,
+  "topic": "food and drinks in a cafe",
+  "lesson_date": null,
+  "variant_count": 2,
+  "advanced_options": {
+    "reading_min_words": 90,
+    "reading_max_words": 130,
+    "target_vocabulary_count": 10,
+    "reading_question_count": 4,
+    "speaking_question_count": 6,
+    "sentence_frame_count": 4,
+    "visual_word_count": 6,
+    "include_visual_activity": true,
+    "include_worksheet_assets": true,
+    "include_images": true,
+    "skill_focus": "speaking",
+    "lesson_style": "conversation",
+    "extra_instructions": "Make the tasks useful for adult learners."
+  }
+}
+
+###
+
+POST http://127.0.0.1:8000/lessons/export/pdf/preview
+Content-Type: application/json
+Accept: application/pdf
+
+{
+  "lesson": {
+    "id": "lesson-1",
+    "level": "A2",
+    "duration_minutes": 30,
+    "theme": "food and drinks in a cafe",
+    "title": "At the Cafe",
+    "lesson_goal": "Students order food and drinks politely.",
+    "target_vocabulary": ["menu", "coffee", "tea", "water", "sandwich", "cake", "bill", "please"],
+    "reading_text": "Anna goes to a small cafe. She reads the menu and orders tea and cake.",
+    "reading_questions": ["Where does Anna go?", "What does she order?", "What does she ask for?"],
+    "speaking_questions": ["What do you order in a cafe?", "Do you like tea?", "What food is cheap?", "How do you ask for the bill?", "What is polite language?"],
+    "pair_work_task": "Student A is a waiter. Student B orders food.",
+    "role_play_scenario": "Order a drink and ask for the bill.",
+    "sentence_frames": ["Can I have __, please?", "I would like __.", "How much is it?"],
+    "cefr_focus": ["ordering food", "cafe vocabulary", "polite requests"]
+  },
+  "pdf_options": {
+    "template": "clean",
+    "font_size": "medium",
+    "font_family": "helvetica",
+    "title_font_size": null,
+    "heading_font_size": null,
+    "body_font_size": null,
+    "include_images": true,
+    "include_answers": false,
+    "include_visual_activity": true,
+    "include_worksheet_assets": true,
+    "page_size": "A4",
+    "spacing": "normal",
+    "accent_color": "0.10 0.34 0.55",
+    "custom_images": []
+  }
+}
+
+###
+
+POST http://127.0.0.1:8000/lessons/generate
+Content-Type: application/json
+Accept: application/json
+
+{
+  "level": "B1",
+  "duration": 45,
+  "topic": null,
+  "lesson_date": "2026-12-20",
+  "variant_count": 2
+}
+
+###
+
+POST http://127.0.0.1:8000/lessons/export/pdf
+Content-Type: application/json
+Accept: application/pdf
+
+{
+  "pdf_options": {
+    "template": "worksheet",
+    "font_size": "medium",
+    "font_family": "helvetica",
+    "title_font_size": null,
+    "heading_font_size": null,
+    "body_font_size": null,
+    "include_images": true,
+    "include_answers": false,
+    "include_visual_activity": true,
+    "include_worksheet_assets": true,
+    "page_size": "A4",
+    "spacing": "normal",
+    "accent_color": "0.10 0.34 0.55",
+    "custom_images": []
+  },
+  "requested_level": "A2",
+  "lesson_theme": "food and drinks in a cafe",
+  "duration_minutes": 30,
+  "source_type": "topic",
+  "total_lessons": 1,
+  "generated_at": "2026-04-27T20:00:00+02:00",
+  "cefr_profile": {
+    "level": "A2",
+    "label": "A2 Elementary",
+    "study_hours": "180-200",
+    "source_name": "Example",
+    "source_url": "https://example.com",
+    "can_do": ["Can order food and drinks.", "Can ask simple questions."],
+    "communication_targets": [],
+    "vocabulary_targets": [],
+    "grammar_targets": []
+  },
+  "lessons": [
+    {
+      "id": "lesson-1",
+      "level": "A2",
+      "duration_minutes": 30,
+      "theme": "food and drinks in a cafe",
+      "title": "At the Cafe",
+      "lesson_goal": "Students order food and drinks politely.",
+      "target_vocabulary": ["menu", "coffee", "tea", "water", "sandwich", "cake", "bill", "please"],
+      "reading_text": "Anna goes to a small cafe. She reads the menu and orders tea and cake.",
+      "reading_questions": ["Where does Anna go?", "What does she order?", "What does she ask for?"],
+      "speaking_questions": ["What do you order in a cafe?", "Do you like tea?", "What food is cheap?", "How do you ask for the bill?", "What is polite language?"],
+      "pair_work_task": "Student A is a waiter. Student B orders food.",
+      "role_play_scenario": "Order a drink and ask for the bill.",
+      "sentence_frames": ["Can I have __, please?", "I would like __.", "How much is it?"],
+      "communication_focus": "Ordering food",
+      "vocabulary_focus": "Cafe words",
+      "grammar_focus": "Polite requests",
+      "cefr_focus": ["ordering food", "cafe vocabulary", "polite requests"],
+      "image_search_query": null,
+      "image_keywords": [],
+      "images": [],
+      "primary_image": null,
+      "visual_activity": null,
+      "worksheet_assets": [],
+      "tags": []
+    }
+  ]
+}
