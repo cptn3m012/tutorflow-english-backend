@@ -3,6 +3,7 @@ from datetime import datetime, UTC
 
 from app.errors import LessonQualityError
 from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
+from app.worksheet_service import build_fill_in_the_blanks_asset, validate_cloze_asset
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import generate_from_ollama
 from app.schemas import (
@@ -264,40 +265,6 @@ def build_visual_activity_fallback(
     )
 
 
-def replace_first_case_insensitive(text: str, target: str, replacement: str) -> str:
-    lower_text = text.lower()
-    lower_target = target.lower()
-    index = lower_text.find(lower_target)
-
-    if index == -1:
-        return text
-
-    return f"{text[:index]}{replacement}{text[index + len(target):]}"
-
-
-def split_into_sentences(text: str) -> list[str]:
-    normalized_text = text.replace("\n", " ").strip()
-    if not normalized_text:
-        return []
-
-    sentences = []
-    current = []
-
-    for character in normalized_text:
-        current.append(character)
-        if character in ".!?":
-            sentence = "".join(current).strip()
-            if sentence:
-                sentences.append(sentence)
-            current = []
-
-    trailing = "".join(current).strip()
-    if trailing:
-        sentences.append(trailing)
-
-    return sentences
-
-
 def normalize_frame_text(frame: str, fallback_word: str) -> str:
     text = frame.strip()
     if not text:
@@ -310,10 +277,6 @@ def normalize_frame_text(frame: str, fallback_word: str) -> str:
         text += "."
 
     return text[0].upper() + text[1:]
-
-
-def build_cloze_line(word: str, theme: str) -> str:
-    return f"In this lesson about {theme}, students use the word ____ in a real-life context."
 
 
 def build_reading_illustration_asset(
@@ -376,47 +339,6 @@ def build_label_the_picture_asset(lesson: LessonVariant) -> LessonWorksheetAsset
     )
 
 
-def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsset:
-    sentences = split_into_sentences(lesson.reading_text)
-    selected_words = []
-
-    for word in lesson.target_vocabulary:
-        normalized_word = word.strip()
-        if normalized_word and normalized_word.lower() in lesson.reading_text.lower():
-            selected_words.append(normalized_word)
-        if len(selected_words) == 4:
-            break
-
-    if len(selected_words) < 4:
-        for word in lesson.target_vocabulary:
-            normalized_word = word.strip()
-            if normalized_word and normalized_word not in selected_words:
-                selected_words.append(normalized_word)
-            if len(selected_words) == 4:
-                break
-
-    lines = []
-    for index, word in enumerate(selected_words):
-        matching_sentence = next(
-            (sentence for sentence in sentences if word.lower() in sentence.lower() and sentence not in lines),
-            None,
-        )
-        if matching_sentence:
-            lines.append(replace_first_case_insensitive(matching_sentence, word, "____"))
-        else:
-            lines.append(build_cloze_line(word, lesson.theme or lesson.title))
-
-    return LessonWorksheetAsset(
-        asset_type="fill_in_the_blanks",
-        title=f"Fill in the blanks: {lesson.title}",
-        instruction="Complete the sentences with words from the word bank.",
-        prompt=None,
-        lines=lines,
-        word_bank=selected_words,
-        answer_key=selected_words.copy(),
-    )
-
-
 def build_mini_dialogue_asset(lesson: LessonVariant) -> LessonWorksheetAsset:
     fallback_words = lesson.target_vocabulary[:3] or ["coffee", "table", "menu"]
     while len(fallback_words) < 3:
@@ -466,9 +388,6 @@ def ensure_worksheet_assets(
             lesson.worksheet_assets = []
             continue
 
-        if lesson.worksheet_assets:
-            continue
-
         lesson.worksheet_assets = build_worksheet_assets(lesson, options.visual_word_count)
 
     return lessons
@@ -504,7 +423,19 @@ def validate_lessons_content(
 
     minimum_reading_words, maximum_reading_words = get_reading_word_targets(level, duration, options)
 
+    seen_readings = set()
     for lesson in lessons:
+        for field_name in ("title", "lesson_goal", "pair_work_task", "role_play_scenario"):
+            if not getattr(lesson, field_name).strip():
+                raise ValueError(f"Lesson field '{field_name}' must not be empty.")
+        for field_name in ("target_vocabulary", "speaking_questions", "sentence_frames"):
+            items = [" ".join(item.split()).casefold() for item in getattr(lesson, field_name)]
+            if any(not item for item in items) or len(set(items)) != len(items):
+                raise ValueError(f"Lesson field '{field_name}' must contain distinct, non-empty items.")
+        normalized_reading = " ".join(lesson.reading_text.split()).casefold()
+        if normalized_reading in seen_readings:
+            raise ValueError("Lesson variants must have different reading passages.")
+        seen_readings.add(normalized_reading)
         if len(lesson.target_vocabulary) != options.target_vocabulary_count:
             raise ValueError(
                 f"Lesson '{lesson.title}' does not have exactly "
@@ -541,6 +472,13 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' reading_text is too long: "
                 f"{reading_word_count} words, expected at most {maximum_reading_words}."
             )
+        if options.include_worksheet_assets:
+            if len(lesson.worksheet_assets) < 5:
+                raise ValueError(f"Lesson '{lesson.title}' does not include enough worksheet assets.")
+            cloze_assets = [asset for asset in lesson.worksheet_assets if asset.asset_type == "fill_in_the_blanks"]
+            if len(cloze_assets) != 1:
+                raise LessonQualityError("Each lesson must include exactly one validated cloze exercise.")
+            validate_cloze_asset(lesson, cloze_assets[0])
         if not options.include_visual_activity:
             continue
         if not lesson.visual_activity:
@@ -552,10 +490,6 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' does not have exactly "
                 f"{options.visual_word_count} visual target words."
             )
-        if options.include_worksheet_assets and len(lesson.worksheet_assets) < 5:
-            raise ValueError(f"Lesson '{lesson.title}' does not include enough worksheet assets.")
-
-
 def prepare_lessons_for_frontend(
     lessons: list[LessonVariant],
     level: str,
