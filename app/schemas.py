@@ -1,5 +1,22 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from typing import Annotated, List, Optional
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class ReadingQuestionAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: NonEmptyText
+    answer: NonEmptyText
+    evidence: NonEmptyText
+
+
+class ReadingComprehension(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ReadingQuestionAnswer] = Field(min_length=1, max_length=8)
 
 
 class LessonAdvancedOptions(BaseModel):
@@ -113,7 +130,8 @@ class LessonVariant(BaseModel):
     target_vocabulary: List[str]
 
     reading_text: str
-    reading_questions: List[str]
+    reading_questions: List[str] = Field(default_factory=list)
+    reading_answers: List[ReadingQuestionAnswer] = Field(default_factory=list)
 
     speaking_questions: List[str]
     pair_work_task: str

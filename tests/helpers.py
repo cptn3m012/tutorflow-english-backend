@@ -11,6 +11,15 @@ READING = (
     "She plans to visit the cafe again with her friend on Friday."
 )
 
+COMPREHENSION = {"items": [
+    {"question": "Where is the cafe?", "answer": "Near Anna's office.",
+     "evidence": "Anna visits a small cafe near her office on Monday morning."},
+    {"question": "What does Anna order?", "answer": "Tea and a sandwich.",
+     "evidence": "She reads the menu and asks the waiter for tea and a sandwich."},
+    {"question": "How does Anna pay?", "answer": "With her card.",
+     "evidence": "After breakfast, she asks for the bill and pays with her card."},
+]}
+
 
 def make_lesson(**updates) -> LessonVariant:
     data = {

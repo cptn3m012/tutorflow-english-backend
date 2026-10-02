@@ -2,6 +2,7 @@ import json
 from datetime import datetime, UTC
 
 from app.errors import LessonQualityError
+from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import generate_from_ollama
 from app.schemas import (
@@ -514,6 +515,7 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' does not have exactly "
                 f"{options.reading_question_count} reading questions."
             )
+        validate_reading_comprehension(lesson, options.reading_question_count)
         if len(lesson.speaking_questions) != options.speaking_question_count:
             raise ValueError(
                 f"Lesson '{lesson.title}' does not have exactly "
@@ -645,6 +647,8 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         duration=request.duration,
         options=options,
     )
+    for lesson in lessons:
+        await generate_reading_comprehension(lesson, cefr_profile["level"], options.reading_question_count)
     lessons = ensure_visual_activities(lessons, options)
     lessons = ensure_worksheet_assets(lessons, options)
     validate_lessons_content(
