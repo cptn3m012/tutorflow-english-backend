@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, UTC
 
+from app.errors import LessonQualityError
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import generate_from_ollama
 from app.schemas import (
@@ -45,10 +46,16 @@ def get_reading_word_targets(
 ) -> tuple[int, int]:
     if options and (options.reading_min_words is not None or options.reading_max_words is not None):
         default_minimum, default_maximum = get_default_reading_word_targets(level, duration)
-        return (
+        minimum, maximum = (
             options.reading_min_words if options.reading_min_words is not None else default_minimum,
             options.reading_max_words if options.reading_max_words is not None else default_maximum,
         )
+        if minimum > maximum:
+            raise LessonQualityError(
+                f"Invalid effective reading range: minimum {minimum} exceeds maximum {maximum}. "
+                "Set both reading_min_words and reading_max_words to a consistent range."
+            )
+        return minimum, maximum
 
     return get_default_reading_word_targets(level, duration)
 
@@ -82,31 +89,6 @@ def build_reading_wording_guidance(
     )
 
 
-def build_reading_length_fallback_paragraph(lesson: LessonVariant, level: str, theme: str) -> str:
-    vocabulary = lesson.target_vocabulary[:6]
-    if len(vocabulary) < 6:
-        vocabulary = vocabulary + ["place", "people", "food", "drink", "table", "menu"][: 6 - len(vocabulary)]
-
-    return " ".join([
-        f"This {theme} lesson stays at {level} level and uses everyday language.",
-        f"In the story, people talk about {vocabulary[0]}, {vocabulary[1]}, and {vocabulary[2]} in a natural way.",
-        f"They also use words like {vocabulary[3]}, {vocabulary[4]}, and {vocabulary[5]} when they describe the situation and their choices.",
-        "The reader can understand the main situation, follow simple actions, and notice useful expressions for daily communication.",
-        "The text gives a few extra details about people, place, food, and choices, so it feels more complete and easier to discuss.",
-    ])
-
-
-def trim_text_to_word_limit(text: str, maximum_words: int) -> str:
-    words = text.replace("\n", " ").split()
-    if len(words) <= maximum_words:
-        return text.strip()
-
-    trimmed = " ".join(words[:maximum_words]).rstrip(" ,;:")
-    if trimmed and trimmed[-1] not in ".!?":
-        trimmed += "."
-    return trimmed
-
-
 async def rewrite_reading_text_if_needed(
     lesson: LessonVariant,
     level: str,
@@ -117,11 +99,19 @@ async def rewrite_reading_text_if_needed(
     minimum_words, maximum_words = get_reading_word_targets(level, duration, options)
     current_text = lesson.reading_text
 
-    for _ in range(3):
+    for attempt in range(4):
         current_word_count = count_words(current_text)
         if minimum_words <= current_word_count <= maximum_words:
+            if current_text != lesson.reading_text:
+                lesson.worksheet_assets = []
             lesson.reading_text = current_text
             return lesson
+
+        if attempt == 3:
+            raise LessonQualityError(
+                f"Reading repair failed for '{lesson.title}' after 3 attempts: "
+                f"{current_word_count} words, expected {minimum_words}-{maximum_words}."
+            )
 
         if current_word_count < minimum_words:
             rewrite_feedback = (
@@ -152,22 +142,6 @@ async def rewrite_reading_text_if_needed(
 
         if cleaned_text:
             current_text = cleaned_text
-
-    current_word_count = count_words(current_text)
-    if current_word_count < minimum_words:
-        fallback_paragraph = build_reading_length_fallback_paragraph(lesson, level, theme)
-        current_text = f"{current_text.strip()}\n\n{fallback_paragraph}".strip()
-        while count_words(current_text) < minimum_words:
-            current_text = (
-                f"{current_text} "
-                "The passage adds more simple details about the setting, the people, and the choices they make during the lesson topic."
-            ).strip()
-
-    current_text = trim_text_to_word_limit(current_text, maximum_words)
-    lesson.reading_text = current_text
-
-    return lesson
-
 
 async def repair_lesson_readings(
     lessons: list[LessonVariant],
@@ -718,6 +692,8 @@ async def generate_lesson_variants(request: LessonGenerateRequest) -> LessonGene
     for attempt in range(3):
         try:
             return await try_generate_once(request)
+        except LessonQualityError:
+            raise
         except Exception as e:
             last_error = e
 
