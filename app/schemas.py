@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -17,6 +17,27 @@ class ReadingComprehension(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: List[ReadingQuestionAnswer] = Field(min_length=1, max_length=8)
+
+
+class LessonQualityIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section: Literal["reading", "comprehension", "cloze"]
+    message: NonEmptyText
+
+
+class LessonQualityReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issues: List[LessonQualityIssue]
+
+
+class ClozeExercise(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lines: List[NonEmptyText] = Field(min_length=1, max_length=4)
+    word_bank: List[NonEmptyText] = Field(min_length=1, max_length=4)
+    answer_key: List[NonEmptyText] = Field(min_length=1, max_length=4)
 
 
 class LessonAdvancedOptions(BaseModel):

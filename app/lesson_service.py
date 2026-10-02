@@ -3,7 +3,8 @@ from datetime import datetime, UTC
 
 from app.errors import LessonQualityError
 from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
-from app.worksheet_service import build_fill_in_the_blanks_asset, validate_cloze_asset
+from app.quality_service import review_lesson_quality
+from app.worksheet_service import build_fill_in_the_blanks_asset, repair_cloze_asset, validate_cloze_asset
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import generate_from_ollama
 from app.schemas import (
@@ -11,6 +12,7 @@ from app.schemas import (
     LessonAdvancedOptions,
     LessonGenerateRequest,
     LessonGenerateResponse,
+    LessonQualityIssue,
     LessonVariant,
     LessonVisualActivity,
     LessonWorksheetAsset,
@@ -97,15 +99,21 @@ async def rewrite_reading_text_if_needed(
     theme: str,
     duration: int,
     options: LessonAdvancedOptions | None = None,
+    *,
+    force: bool = False,
+    quality_feedback: str = "",
 ) -> LessonVariant:
     minimum_words, maximum_words = get_reading_word_targets(level, duration, options)
     current_text = lesson.reading_text
+    has_rewrite = False
 
     for attempt in range(4):
         current_word_count = count_words(current_text)
-        if minimum_words <= current_word_count <= maximum_words:
-            if current_text != lesson.reading_text:
+        if minimum_words <= current_word_count <= maximum_words and (not force or has_rewrite):
+            if force or current_text != lesson.reading_text:
                 lesson.worksheet_assets = []
+                lesson.reading_questions = []
+                lesson.reading_answers = []
             lesson.reading_text = current_text
             return lesson
 
@@ -120,11 +128,15 @@ async def rewrite_reading_text_if_needed(
                 f"The current version is too short at {current_word_count} words. "
                 f"Return a fuller version with at least {minimum_words} words and no more than {maximum_words} words."
             )
-        else:
+        elif current_word_count > maximum_words:
             rewrite_feedback = (
                 f"The current version is too long at {current_word_count} words. "
                 f"Return a tighter version with at least {minimum_words} words and no more than {maximum_words} words."
             )
+        else:
+            rewrite_feedback = f"Keep the passage between {minimum_words} and {maximum_words} words."
+        if quality_feedback:
+            rewrite_feedback += f"\nContent problems to fix: {quality_feedback}"
 
         prompt = build_reading_rewrite_prompt(
             level=level,
@@ -144,6 +156,7 @@ async def rewrite_reading_text_if_needed(
 
         if cleaned_text:
             current_text = cleaned_text
+            has_rewrite = True
 
 async def repair_lesson_readings(
     lessons: list[LessonVariant],
@@ -411,6 +424,56 @@ def ensure_visual_activities(
     return lessons
 
 
+async def repair_lesson_consistency(
+    lesson: LessonVariant, level: str, theme: str, duration: int, options: LessonAdvancedOptions,
+) -> LessonVariant:
+    for round_index in range(3):
+        try:
+            if options.include_worksheet_assets and not lesson.worksheet_assets:
+                ensure_worksheet_assets([lesson], options)
+            elif not options.include_worksheet_assets:
+                lesson.worksheet_assets = []
+        except LessonQualityError as error:
+            # Missing usable vocabulary contexts require a passage repair before building a cloze.
+            issues = [LessonQualityIssue(
+                section="reading",
+                message=f"Include target vocabulary naturally in distinct complete sentences. {error}",
+            )]
+        else:
+            issues = await review_lesson_quality(lesson, level)
+
+        if not issues:
+            return lesson
+        if round_index == 2:
+            details = "; ".join(f"{issue.section}: {issue.message}" for issue in issues)
+            raise LessonQualityError(f"Lesson consistency checks failed for '{lesson.title}': {details}")
+
+        feedback_by_section = {
+            section: "\n".join(issue.message for issue in issues if issue.section == section)
+            for section in ("reading", "comprehension", "cloze")
+        }
+        if feedback_by_section["reading"]:
+            await rewrite_reading_text_if_needed(
+                lesson, level, theme, duration, options, force=True,
+                quality_feedback="\n".join(issue.message for issue in issues),
+            )
+            # All text-dependent sections are rebuilt from the repaired passage.
+            await generate_reading_comprehension(lesson, level, options.reading_question_count)
+            continue
+        if feedback_by_section["comprehension"]:
+            await generate_reading_comprehension(
+                lesson, level, options.reading_question_count, feedback_by_section["comprehension"],
+            )
+        if feedback_by_section["cloze"]:
+            repaired_asset = await repair_cloze_asset(lesson, feedback_by_section["cloze"])
+            lesson.worksheet_assets = [
+                repaired_asset if asset.asset_type == "fill_in_the_blanks" else asset
+                for asset in lesson.worksheet_assets
+            ]
+
+    raise AssertionError("Unreachable quality review state")
+
+
 def validate_lessons_content(
     lessons: list[LessonVariant],
     expected_count: int,
@@ -573,6 +636,7 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
 
     lessons = [LessonVariant.model_validate(item) for item in parsed_json["lessons"]]
 
+    lessons = attach_lesson_context(lessons, cefr_profile["level"], final_theme, request.duration)
     lessons = normalize_lessons_content(lessons, cefr_profile["level"])
     lessons = await repair_lesson_readings(
         lessons=lessons,
@@ -584,7 +648,9 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
     for lesson in lessons:
         await generate_reading_comprehension(lesson, cefr_profile["level"], options.reading_question_count)
     lessons = ensure_visual_activities(lessons, options)
-    lessons = ensure_worksheet_assets(lessons, options)
+    for lesson in lessons:
+        lesson.worksheet_assets = []
+        await repair_lesson_consistency(lesson, cefr_profile["level"], final_theme, request.duration, options)
     validate_lessons_content(
         lessons,
         request.variant_count,
@@ -592,13 +658,6 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         request.duration,
         options,
     )
-    lessons = attach_lesson_context(
-        lessons=lessons,
-        level=cefr_profile["level"],
-        theme=final_theme,
-        duration=request.duration,
-    )
-
     if options.include_images:
         lessons = await attach_images_to_lessons(lessons)
     else:

@@ -1,8 +1,10 @@
 import re
 
 from app.errors import LessonQualityError
+from app.ollama_client import generate_from_ollama
+from app.prompts import build_cloze_repair_prompt
 from app.reading_service import normalize_whitespace
-from app.schemas import LessonVariant, LessonWorksheetAsset
+from app.schemas import ClozeExercise, LessonVariant, LessonWorksheetAsset
 
 
 def word_pattern(word: str) -> re.Pattern:
@@ -85,3 +87,25 @@ def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsse
     )
     validate_cloze_asset(lesson, asset)
     return asset
+
+
+async def repair_cloze_asset(lesson: LessonVariant, feedback: str) -> LessonWorksheetAsset:
+    context = {"reading_text": lesson.reading_text, "target_vocabulary": lesson.target_vocabulary}
+    last_error = feedback
+    for _ in range(3):
+        raw_response = await generate_from_ollama(
+            build_cloze_repair_prompt(context, last_error), json_schema=ClozeExercise.model_json_schema(),
+        )
+        try:
+            exercise = ClozeExercise.model_validate_json(raw_response)
+            asset = LessonWorksheetAsset(
+                asset_type="fill_in_the_blanks", title=f"Fill in the blanks: {lesson.title}",
+                instruction="Complete the sentences from the reading with words from the word bank.",
+                **exercise.model_dump(),
+            )
+            validate_cloze_asset(lesson, asset)
+            return asset
+        except ValueError as error:
+            last_error = f"{feedback}\nStructural validation also failed: {error}"
+
+    raise LessonQualityError(f"Cloze repair failed for '{lesson.title}' after 3 attempts: {last_error}")

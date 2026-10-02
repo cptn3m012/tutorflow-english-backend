@@ -48,7 +48,7 @@ async def generate_reading_comprehension(
             })
             validate_reading_comprehension(candidate, question_count)
         except ValueError as error:
-            last_error = str(error)
+            last_error = f"{feedback}\nStructural validation also failed: {error}".strip()
             continue
 
         lesson.reading_questions = candidate.reading_questions

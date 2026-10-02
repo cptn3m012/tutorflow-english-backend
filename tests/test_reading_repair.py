@@ -47,6 +47,17 @@ class ReadingRepairTests(unittest.IsolatedAsyncioTestCase):
                 await generate_lesson_variants(request)
         self.assertEqual(generate.await_count, 1)
 
+    async def test_empty_responses_cannot_approve_a_forced_content_repair(self):
+        lesson = make_lesson()
+        with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
+                   return_value=" ") as generate:
+            with self.assertRaises(LessonQualityError):
+                await rewrite_reading_text_if_needed(
+                    lesson, "A2", "cafe", 30, force=True, quality_feedback="Fix the passage content.",
+                )
+        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(lesson.reading_text, READING)
+
     def test_one_sided_overrides_cannot_create_an_impossible_range(self):
         for options in (LessonAdvancedOptions(reading_min_words=200),
                         LessonAdvancedOptions(reading_max_words=50)):
