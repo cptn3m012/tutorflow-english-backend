@@ -41,9 +41,14 @@ def validate_cloze_asset(lesson: LessonVariant, asset: LessonWorksheetAsset) -> 
 
     source_sentences = {sentence.casefold() for sentence in split_into_sentences(lesson.reading_text)}
     used_sentences = set()
+    used_lines = set()
     for line, answer in zip(asset.lines, asset.answer_key):
         if line.count("____") != 1 or "_" in line.replace("____", ""):
             raise LessonQualityError("Every cloze sentence must contain exactly one blank.")
+        normalized_line = normalize_whitespace(line).casefold()
+        if normalized_line in used_lines:
+            raise LessonQualityError("Cloze sentences must not repeat the same blank context.")
+        used_lines.add(normalized_line)
         restored = normalize_whitespace(line.replace("____", answer, 1)).casefold()
         if restored not in source_sentences or restored in used_sentences:
             raise LessonQualityError("Cloze answers must restore distinct sentences from the final reading.")
@@ -52,6 +57,12 @@ def validate_cloze_asset(lesson: LessonVariant, asset: LessonWorksheetAsset) -> 
         match = word_pattern(answer).match(prefix + answer + suffix, len(prefix))
         if match is None or match.end() != len(prefix) + len(answer):
             raise LessonQualityError("Cloze blanks must replace whole words or phrases.")
+        supported_answers = [
+            word for word in asset.word_bank
+            if normalize_whitespace(line.replace("____", word, 1)).casefold() in source_sentences
+        ]
+        if len(supported_answers) != 1:
+            raise LessonQualityError("Each cloze blank must have one answer supported by the final reading.")
         used_sentences.add(restored)
 
 
@@ -59,6 +70,9 @@ def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsse
     sentences = split_into_sentences(lesson.reading_text)
     lines, answers = [], []
     used_sentences, used_words = set(), set()
+    instruction = (
+        "Use the reading to complete each sentence with a word from the word bank. Use each word once."
+    )
     for word in lesson.target_vocabulary:
         normalized = normalize_whitespace(word)
         if not normalized or normalized.casefold() in used_words:
@@ -69,8 +83,18 @@ def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsse
             match = word_pattern(normalized).search(sentence)
             if match is None:
                 continue
-            lines.append(sentence[:match.start()] + "____" + sentence[match.end():])
-            answers.append(match.group())
+            proposed_lines = [*lines, sentence[:match.start()] + "____" + sentence[match.end():]]
+            proposed_answers = [*answers, match.group()]
+            candidate = LessonWorksheetAsset(
+                asset_type="fill_in_the_blanks", title=f"Fill in the blanks: {lesson.title}",
+                instruction=instruction, lines=proposed_lines,
+                word_bank=proposed_answers.copy(), answer_key=proposed_answers,
+            )
+            try:
+                validate_cloze_asset(lesson, candidate)
+            except LessonQualityError:
+                continue
+            lines, answers = proposed_lines, proposed_answers
             used_sentences.add(sentence.casefold())
             used_words.add(normalized.casefold())
             break
@@ -80,7 +104,7 @@ def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsse
     asset = LessonWorksheetAsset(
         asset_type="fill_in_the_blanks",
         title=f"Fill in the blanks: {lesson.title}",
-        instruction="Complete the sentences from the reading with words from the word bank.",
+        instruction=instruction,
         lines=lines,
         word_bank=answers.copy(),
         answer_key=answers,
@@ -100,7 +124,10 @@ async def repair_cloze_asset(lesson: LessonVariant, feedback: str) -> LessonWork
             exercise = ClozeExercise.model_validate_json(raw_response)
             asset = LessonWorksheetAsset(
                 asset_type="fill_in_the_blanks", title=f"Fill in the blanks: {lesson.title}",
-                instruction="Complete the sentences from the reading with words from the word bank.",
+                instruction=(
+                    "Use the reading to complete each sentence with a word from the word bank. "
+                    "Use each word once."
+                ),
                 **exercise.model_dump(),
             )
             validate_cloze_asset(lesson, asset)

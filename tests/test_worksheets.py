@@ -37,6 +37,41 @@ class WorksheetTests(unittest.TestCase):
         self.assertEqual(asset.lines, ["Anna orders ____."])
         self.assertEqual(asset.answer_key, ["tea"])
 
+    def test_duplicate_blank_contexts_are_skipped_during_building(self):
+        lesson = make_lesson(reading_text="Anna drinks tea. Anna drinks coffee. Ben eats cake.",
+                             target_vocabulary=["tea", "coffee", "cake"])
+        asset = build_fill_in_the_blanks_asset(lesson)
+        self.assertEqual(asset.answer_key, ["tea", "cake"])
+        self.assertEqual(len(set(asset.lines)), len(asset.lines))
+        self.assertIn("Use the reading", asset.instruction)
+
+    def test_ambiguous_bank_is_rejected_even_with_another_unique_context(self):
+        lesson = make_lesson(
+            reading_text="Anna drinks tea. Anna drinks coffee. Ben orders coffee with milk.",
+            target_vocabulary=["tea", "coffee"],
+        )
+        asset = build_fill_in_the_blanks_asset(lesson)
+        # Including coffee would give the first blank two source-supported answers.
+        self.assertEqual(asset.answer_key, ["tea"])
+        validate_cloze_asset(lesson, asset)
+
+    def test_source_passage_resolves_grammatically_possible_alternatives(self):
+        lesson = make_lesson(reading_text="We have coffee, tea and juice. Anna asks for a glass of juice.",
+                             target_vocabulary=["coffee", "juice"])
+        asset = build_fill_in_the_blanks_asset(lesson)
+        self.assertEqual(asset.answer_key, ["coffee", "juice"])
+        validate_cloze_asset(lesson, asset)
+
+    def test_two_source_supported_answers_for_one_blank_are_rejected(self):
+        lesson = make_lesson(reading_text="Anna drinks tea. Anna drinks coffee. Ben orders coffee.",
+                             target_vocabulary=["tea", "coffee"])
+        asset = build_fill_in_the_blanks_asset(make_lesson()).model_copy(update={
+            "lines": ["Anna drinks ____.", "Ben orders ____."],
+            "word_bank": ["tea", "coffee"], "answer_key": ["tea", "coffee"],
+        })
+        with self.assertRaisesRegex(LessonQualityError, "one answer supported"):
+            validate_cloze_asset(lesson, asset)
+
     def test_wrong_answer_stale_sentence_and_partial_word_are_rejected(self):
         lesson = make_lesson()
         asset = build_fill_in_the_blanks_asset(lesson)

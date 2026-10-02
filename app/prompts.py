@@ -263,8 +263,10 @@ Return an empty issues list only when all supplied material passes these checks:
   actually supports that answer. A quote appearing in the text is insufficient by itself.
   Reject misleading questions, invented facts and questions that duplicate the same detail.
 - cloze: independently solve each blank using the word bank. Check that the answer key is
-  correct and each blank has one clear answer in context. Report ambiguity even if the supplied
-  answer restores a real sentence. Check that different items practise distinct contexts.
+  correct and each blank has one clear answer supported by the source passage. Learners use
+  the reading to solve this exercise; an alternative word that is grammatically possible but
+  contradicted by the source passage is not an ambiguity. Reject repeated blank contexts or
+  multiple answers supported by the passage. Check that items practise distinct contexts.
 - Do not report cloze issues when no cloze exercise is supplied.
 - Report only concrete errors, not optional stylistic preferences. Name the affected question
   or sentence and explain why it fails. Reading issues require passage changes;
@@ -293,6 +295,7 @@ Return only JSON: {{"lines": ["sentence with ____"], "word_bank": ["word"], "ans
 - Use each source sentence and each answer only once.
 - The word bank and ordered answer key must contain the same words, using their actual form in the text.
 - Each blank must have one unambiguous answer from the word bank; avoid contexts where other
-  words in the bank would also be reasonable. Prefer fewer clear items to ambiguous items.
+  words in the bank also restore sentences present in the passage. Learners use the source
+  reading to resolve the blanks. Prefer fewer clear items to ambiguous or repeated items.
 - Do not invent sentences or use generic commentary about the lesson.
 """.strip()

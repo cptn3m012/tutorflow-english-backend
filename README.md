@@ -234,6 +234,8 @@ Each lesson keeps the existing `reading_questions` string array and adds a corre
 The backend checks question counts, duplicate questions, answer order, and exact evidence
 from the final reading. Cloze exercises use 1-4 distinct sentences from that reading,
 replace whole words or phrases, and must reconstruct their source sentences with the answer key.
+Learners use the reading to resolve the blanks. A different word from the bank must not
+restore another sentence also present in that reading, and blank contexts cannot repeat.
 Incoming generated worksheets are rebuilt after the reading is finalized.
 
 A separate model review checks passage coherence, question/answer correctness, supporting
