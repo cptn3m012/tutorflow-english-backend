@@ -337,7 +337,39 @@ http://127.0.0.1:4173
 http://localhost:4173
 ```
 
-For production, update the `allow_origins` list in `app/main.py` with the deployed frontend URL.
+Only GET and POST are allowed through CORS, along with the JSON Content-Type header. Cross-origin cookies are disabled because the current frontend does not use cookie authentication. Content-Disposition is exposed for PDF downloads. For production, configure exact frontend origins; CORS is not authentication.
+
+## Connecting the React Frontend Locally
+
+Run Ollama with `qwen3:14b` and start this backend in its virtual environment:
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+In the frontend repository, create `.env.local` with public configuration only:
+
+```dotenv
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+Restart the frontend with `npm run dev` and open `http://127.0.0.1:5173`.
+The published frontend calls the real API directly. Start with one lesson variant;
+disable images and visual activity for the first connection check. Generation can
+take several minutes.
+
+The two applications communicate over HTTP. They remain separate Git repositories.
+Both development servers and Ollama should listen on loopback addresses for local use.
+The health endpoint checks FastAPI availability, not model readiness.
+
+Never put secrets into `VITE_*` variables: Vite embeds them in browser code.
+Optional image provider credentials stay in the backend environment. Ignored `.env`
+files are not automatically loaded by this application; use process environment
+variables or Uvicorn's `--env-file` option. Commit only placeholder configuration,
+and review `git status` and `git diff --cached` before committing.
+
+Public deployment requires separate HTTPS, authentication and request-limit setup
+before exposing generation. Keep Ollama's port 11434 private.
 
 ## Security Notes
 
