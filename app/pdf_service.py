@@ -7,6 +7,7 @@ from datetime import datetime, UTC
 from typing import Any
 from textwrap import wrap
 
+from app.reading_service import validate_reading_comprehension
 from app.schemas import (
     CefrProfile,
     LessonGenerateResponse,
@@ -63,7 +64,11 @@ def parse_lesson_pdf_payload(payload: Any) -> tuple[LessonGenerateResponse, PdfE
     if isinstance(payload, dict) and "pdf_options" in payload:
         options = PdfExportOptions.model_validate(payload.get("pdf_options") or {})
 
-    return coerce_lesson_pdf_payload(payload), options
+    response = coerce_lesson_pdf_payload(payload)
+    for lesson in response.lessons:
+        if lesson.reading_answers:
+            validate_reading_comprehension(lesson, len(lesson.reading_questions))
+    return response, options
 
 
 def coerce_lesson_pdf_payload(payload: Any) -> LessonGenerateResponse:
@@ -481,6 +486,16 @@ def add_worksheet_assets(doc: PdfDocument, assets: list[LessonWorksheetAsset], n
             doc.text("Answer key: " + ", ".join(asset.answer_key), size=10, indent=16, gap=8, color=MUTED_COLOR)
 
 
+def add_reading_answer_key(doc: PdfDocument, lesson: LessonVariant):
+    if not doc.options.include_answers or not lesson.reading_answers:
+        return
+    add_section(doc, 99, "Reading answer key")
+    for index, item in enumerate(lesson.reading_answers, start=1):
+        doc.text(f"{index}. {item.question}", size=10, bold=True, indent=8, gap=2)
+        doc.text(f"Answer: {item.answer}", size=10, indent=16, gap=2)
+        doc.text(f"Evidence: {item.evidence}", size=9, indent=16, gap=8, color=MUTED_COLOR)
+
+
 def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int):
     doc.text(lesson.title, size=24, bold=True, gap=7)
     doc.text("English lesson", size=11, bold=True, gap=10, color=doc.accent_color)
@@ -543,6 +558,7 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int):
         worksheet_number = 8
 
     add_worksheet_assets(doc, lesson.worksheet_assets, worksheet_number)
+    add_reading_answer_key(doc, lesson)
 
     lesson_image = lesson.primary_image or (lesson.images[0] if lesson.images else None)
     if doc.options.include_images and lesson_image:

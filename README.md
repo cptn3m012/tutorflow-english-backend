@@ -212,6 +212,49 @@ Either `topic` or `lesson_date` must be provided.
 
 ## PDF Export
 
+### Reading quality and answer keys
+
+Generation prepares the final reading before creating comprehension questions and worksheets.
+Each lesson keeps the existing `reading_questions` string array and adds a corresponding
+`reading_answers` array in the same order:
+
+```json
+{
+  "reading_questions": ["What does Anna order?"],
+  "reading_answers": [
+    {
+      "question": "What does Anna order?",
+      "answer": "Tea and a sandwich.",
+      "evidence": "She reads the menu and asks the waiter for tea and a sandwich."
+    }
+  ]
+}
+```
+
+The backend checks question counts, duplicate questions, answer order, and exact evidence
+from the final reading. Cloze exercises use 1-4 distinct sentences from that reading,
+replace whole words or phrases, and must reconstruct their source sentences with the answer key.
+Learners use the reading to resolve the blanks. A different word from the bank must not
+restore another sentence also present in that reading, and blank contexts cannot repeat.
+Incoming generated worksheets are rebuilt after the reading is finalized.
+
+A separate model review checks passage coherence, question/answer correctness, supporting
+evidence, and cloze ambiguity. Issues trigger repairs of the affected section; a reading
+change regenerates its questions, answers, and worksheets. There are at most three content
+review rounds with two repair rounds. Structured-output parsing and section generation
+have their own limits of three attempts. Exhausted content repairs return an error rather
+than padding text or restarting the entire lesson generation.
+
+Question generation and quality review use Ollama's JSON Schema `format` parameter.
+Expect an additional question-generation call and at least one quality-review call per
+lesson variant. Semantic review is model-assisted and still requires evaluation against
+teacher-reviewed examples; it does not certify CEFR proficiency or guarantee every answer.
+
+With `pdf_options.include_answers=true`, PDFs include a reading answer key with answers and
+quoted evidence. Student PDFs hide this section by default. Legacy PDF payloads without
+`reading_answers` are still accepted. Supplied answer keys with mismatched question order
+or evidence absent from the reading are rejected.
+
 Download a PDF:
 
 ```http
@@ -271,6 +314,9 @@ english-lesson-app-backend/
 | `app/main.py` | Creates the FastAPI application, configures CORS, and registers routers |
 | `app/api/routes_lessons.py` | Defines lesson and PDF API routes |
 | `app/lesson_service.py` | Contains the main lesson generation, validation, and enrichment flow |
+| `app/reading_service.py` | Generates comprehension questions, answers, and supporting evidence |
+| `app/quality_service.py` | Reviews semantic consistency of readings, answers, and cloze exercises |
+| `app/worksheet_service.py` | Builds and repairs reading-based cloze exercises |
 | `app/ollama_client.py` | Sends generation requests to the local Ollama API |
 | `app/prompts.py` | Stores prompt builders for lesson generation and image metadata |
 | `app/schemas.py` | Defines Pydantic request and response models |
@@ -291,7 +337,43 @@ http://127.0.0.1:4173
 http://localhost:4173
 ```
 
-For production, update the `allow_origins` list in `app/main.py` with the deployed frontend URL.
+Only GET and POST are allowed through CORS, along with the JSON Content-Type header. Cross-origin cookies are disabled because the current frontend does not use cookie authentication. Content-Disposition is exposed for PDF downloads. For production, configure exact frontend origins; CORS is not authentication.
+
+## Connecting the React Frontend Locally
+
+Run Ollama with `qwen3:14b` and start this backend in its virtual environment:
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Use the [TutorFlow frontend](https://github.com/cptn3m012/tutorflow-english-frontend).
+In that repository, create `.env.local` with public configuration only:
+
+```dotenv
+VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_APP_MODE=live
+```
+
+Restart the frontend with `npm run dev` and open `http://127.0.0.1:5173/studio`.
+TutorFlow preserves its demo mode; select **Live API** to call this backend.
+Without local configuration, a fresh checkout opens the authored demo lessons.
+Start with one lesson variant;
+disable images and visual activity for the first connection check. Generation can
+take several minutes.
+
+The two applications communicate over HTTP. They remain separate Git repositories.
+Both development servers and Ollama should listen on loopback addresses for local use.
+The health endpoint checks FastAPI availability, not model readiness.
+
+Never put secrets into `VITE_*` variables: Vite embeds them in browser code.
+Optional image provider credentials stay in the backend environment. Ignored `.env`
+files are not automatically loaded by this application; use process environment
+variables or Uvicorn's `--env-file` option. Commit only placeholder configuration,
+and review `git status` and `git diff --cached` before committing.
+
+Public deployment requires separate HTTPS, authentication and request-limit setup
+before exposing generation. Keep Ollama's port 11434 private.
 
 ## Security Notes
 
@@ -321,6 +403,16 @@ http://127.0.0.1:8000/docs
 ```
 
 ## Current Status
+
+Run the regression and API integration tests without contacting Ollama or image providers:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use controlled model responses to verify dependency rebuilding, evidence checks,
+bounded repairs, word boundaries, API compatibility, and PDF answer visibility. They do
+not benchmark the live model's generation quality or latency.
 
 The backend is ready for local lesson generation and PDF export. Before production deployment, configure environment-specific values such as allowed CORS origins, Ollama model settings, and any optional image provider credentials.
 

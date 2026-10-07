@@ -1,6 +1,10 @@
 import json
 from datetime import datetime, UTC
 
+from app.errors import LessonQualityError
+from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
+from app.quality_service import review_lesson_quality
+from app.worksheet_service import build_fill_in_the_blanks_asset, repair_cloze_asset, validate_cloze_asset
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import generate_from_ollama
 from app.schemas import (
@@ -8,6 +12,7 @@ from app.schemas import (
     LessonAdvancedOptions,
     LessonGenerateRequest,
     LessonGenerateResponse,
+    LessonQualityIssue,
     LessonVariant,
     LessonVisualActivity,
     LessonWorksheetAsset,
@@ -45,10 +50,16 @@ def get_reading_word_targets(
 ) -> tuple[int, int]:
     if options and (options.reading_min_words is not None or options.reading_max_words is not None):
         default_minimum, default_maximum = get_default_reading_word_targets(level, duration)
-        return (
+        minimum, maximum = (
             options.reading_min_words if options.reading_min_words is not None else default_minimum,
             options.reading_max_words if options.reading_max_words is not None else default_maximum,
         )
+        if minimum > maximum:
+            raise LessonQualityError(
+                f"Invalid effective reading range: minimum {minimum} exceeds maximum {maximum}. "
+                "Set both reading_min_words and reading_max_words to a consistent range."
+            )
+        return minimum, maximum
 
     return get_default_reading_word_targets(level, duration)
 
@@ -82,57 +93,50 @@ def build_reading_wording_guidance(
     )
 
 
-def build_reading_length_fallback_paragraph(lesson: LessonVariant, level: str, theme: str) -> str:
-    vocabulary = lesson.target_vocabulary[:6]
-    if len(vocabulary) < 6:
-        vocabulary = vocabulary + ["place", "people", "food", "drink", "table", "menu"][: 6 - len(vocabulary)]
-
-    return " ".join([
-        f"This {theme} lesson stays at {level} level and uses everyday language.",
-        f"In the story, people talk about {vocabulary[0]}, {vocabulary[1]}, and {vocabulary[2]} in a natural way.",
-        f"They also use words like {vocabulary[3]}, {vocabulary[4]}, and {vocabulary[5]} when they describe the situation and their choices.",
-        "The reader can understand the main situation, follow simple actions, and notice useful expressions for daily communication.",
-        "The text gives a few extra details about people, place, food, and choices, so it feels more complete and easier to discuss.",
-    ])
-
-
-def trim_text_to_word_limit(text: str, maximum_words: int) -> str:
-    words = text.replace("\n", " ").split()
-    if len(words) <= maximum_words:
-        return text.strip()
-
-    trimmed = " ".join(words[:maximum_words]).rstrip(" ,;:")
-    if trimmed and trimmed[-1] not in ".!?":
-        trimmed += "."
-    return trimmed
-
-
 async def rewrite_reading_text_if_needed(
     lesson: LessonVariant,
     level: str,
     theme: str,
     duration: int,
     options: LessonAdvancedOptions | None = None,
+    *,
+    force: bool = False,
+    quality_feedback: str = "",
 ) -> LessonVariant:
     minimum_words, maximum_words = get_reading_word_targets(level, duration, options)
     current_text = lesson.reading_text
+    has_rewrite = False
 
-    for _ in range(3):
+    for attempt in range(4):
         current_word_count = count_words(current_text)
-        if minimum_words <= current_word_count <= maximum_words:
+        if minimum_words <= current_word_count <= maximum_words and (not force or has_rewrite):
+            if force or current_text != lesson.reading_text:
+                lesson.worksheet_assets = []
+                lesson.reading_questions = []
+                lesson.reading_answers = []
             lesson.reading_text = current_text
             return lesson
+
+        if attempt == 3:
+            raise LessonQualityError(
+                f"Reading repair failed for '{lesson.title}' after 3 attempts: "
+                f"{current_word_count} words, expected {minimum_words}-{maximum_words}."
+            )
 
         if current_word_count < minimum_words:
             rewrite_feedback = (
                 f"The current version is too short at {current_word_count} words. "
                 f"Return a fuller version with at least {minimum_words} words and no more than {maximum_words} words."
             )
-        else:
+        elif current_word_count > maximum_words:
             rewrite_feedback = (
                 f"The current version is too long at {current_word_count} words. "
                 f"Return a tighter version with at least {minimum_words} words and no more than {maximum_words} words."
             )
+        else:
+            rewrite_feedback = f"Keep the passage between {minimum_words} and {maximum_words} words."
+        if quality_feedback:
+            rewrite_feedback += f"\nContent problems to fix: {quality_feedback}"
 
         prompt = build_reading_rewrite_prompt(
             level=level,
@@ -152,22 +156,7 @@ async def rewrite_reading_text_if_needed(
 
         if cleaned_text:
             current_text = cleaned_text
-
-    current_word_count = count_words(current_text)
-    if current_word_count < minimum_words:
-        fallback_paragraph = build_reading_length_fallback_paragraph(lesson, level, theme)
-        current_text = f"{current_text.strip()}\n\n{fallback_paragraph}".strip()
-        while count_words(current_text) < minimum_words:
-            current_text = (
-                f"{current_text} "
-                "The passage adds more simple details about the setting, the people, and the choices they make during the lesson topic."
-            ).strip()
-
-    current_text = trim_text_to_word_limit(current_text, maximum_words)
-    lesson.reading_text = current_text
-
-    return lesson
-
+            has_rewrite = True
 
 async def repair_lesson_readings(
     lessons: list[LessonVariant],
@@ -289,40 +278,6 @@ def build_visual_activity_fallback(
     )
 
 
-def replace_first_case_insensitive(text: str, target: str, replacement: str) -> str:
-    lower_text = text.lower()
-    lower_target = target.lower()
-    index = lower_text.find(lower_target)
-
-    if index == -1:
-        return text
-
-    return f"{text[:index]}{replacement}{text[index + len(target):]}"
-
-
-def split_into_sentences(text: str) -> list[str]:
-    normalized_text = text.replace("\n", " ").strip()
-    if not normalized_text:
-        return []
-
-    sentences = []
-    current = []
-
-    for character in normalized_text:
-        current.append(character)
-        if character in ".!?":
-            sentence = "".join(current).strip()
-            if sentence:
-                sentences.append(sentence)
-            current = []
-
-    trailing = "".join(current).strip()
-    if trailing:
-        sentences.append(trailing)
-
-    return sentences
-
-
 def normalize_frame_text(frame: str, fallback_word: str) -> str:
     text = frame.strip()
     if not text:
@@ -335,10 +290,6 @@ def normalize_frame_text(frame: str, fallback_word: str) -> str:
         text += "."
 
     return text[0].upper() + text[1:]
-
-
-def build_cloze_line(word: str, theme: str) -> str:
-    return f"In this lesson about {theme}, students use the word ____ in a real-life context."
 
 
 def build_reading_illustration_asset(
@@ -401,47 +352,6 @@ def build_label_the_picture_asset(lesson: LessonVariant) -> LessonWorksheetAsset
     )
 
 
-def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsset:
-    sentences = split_into_sentences(lesson.reading_text)
-    selected_words = []
-
-    for word in lesson.target_vocabulary:
-        normalized_word = word.strip()
-        if normalized_word and normalized_word.lower() in lesson.reading_text.lower():
-            selected_words.append(normalized_word)
-        if len(selected_words) == 4:
-            break
-
-    if len(selected_words) < 4:
-        for word in lesson.target_vocabulary:
-            normalized_word = word.strip()
-            if normalized_word and normalized_word not in selected_words:
-                selected_words.append(normalized_word)
-            if len(selected_words) == 4:
-                break
-
-    lines = []
-    for index, word in enumerate(selected_words):
-        matching_sentence = next(
-            (sentence for sentence in sentences if word.lower() in sentence.lower() and sentence not in lines),
-            None,
-        )
-        if matching_sentence:
-            lines.append(replace_first_case_insensitive(matching_sentence, word, "____"))
-        else:
-            lines.append(build_cloze_line(word, lesson.theme or lesson.title))
-
-    return LessonWorksheetAsset(
-        asset_type="fill_in_the_blanks",
-        title=f"Fill in the blanks: {lesson.title}",
-        instruction="Complete the sentences with words from the word bank.",
-        prompt=None,
-        lines=lines,
-        word_bank=selected_words,
-        answer_key=selected_words.copy(),
-    )
-
-
 def build_mini_dialogue_asset(lesson: LessonVariant) -> LessonWorksheetAsset:
     fallback_words = lesson.target_vocabulary[:3] or ["coffee", "table", "menu"]
     while len(fallback_words) < 3:
@@ -491,9 +401,6 @@ def ensure_worksheet_assets(
             lesson.worksheet_assets = []
             continue
 
-        if lesson.worksheet_assets:
-            continue
-
         lesson.worksheet_assets = build_worksheet_assets(lesson, options.visual_word_count)
 
     return lessons
@@ -517,6 +424,56 @@ def ensure_visual_activities(
     return lessons
 
 
+async def repair_lesson_consistency(
+    lesson: LessonVariant, level: str, theme: str, duration: int, options: LessonAdvancedOptions,
+) -> LessonVariant:
+    for round_index in range(3):
+        try:
+            if options.include_worksheet_assets and not lesson.worksheet_assets:
+                ensure_worksheet_assets([lesson], options)
+            elif not options.include_worksheet_assets:
+                lesson.worksheet_assets = []
+        except LessonQualityError as error:
+            # Missing usable vocabulary contexts require a passage repair before building a cloze.
+            issues = [LessonQualityIssue(
+                section="reading",
+                message=f"Include target vocabulary naturally in distinct complete sentences. {error}",
+            )]
+        else:
+            issues = await review_lesson_quality(lesson, level)
+
+        if not issues:
+            return lesson
+        if round_index == 2:
+            details = "; ".join(f"{issue.section}: {issue.message}" for issue in issues)
+            raise LessonQualityError(f"Lesson consistency checks failed for '{lesson.title}': {details}")
+
+        feedback_by_section = {
+            section: "\n".join(issue.message for issue in issues if issue.section == section)
+            for section in ("reading", "comprehension", "cloze")
+        }
+        if feedback_by_section["reading"]:
+            await rewrite_reading_text_if_needed(
+                lesson, level, theme, duration, options, force=True,
+                quality_feedback="\n".join(issue.message for issue in issues),
+            )
+            # All text-dependent sections are rebuilt from the repaired passage.
+            await generate_reading_comprehension(lesson, level, options.reading_question_count)
+            continue
+        if feedback_by_section["comprehension"]:
+            await generate_reading_comprehension(
+                lesson, level, options.reading_question_count, feedback_by_section["comprehension"],
+            )
+        if feedback_by_section["cloze"]:
+            repaired_asset = await repair_cloze_asset(lesson, feedback_by_section["cloze"])
+            lesson.worksheet_assets = [
+                repaired_asset if asset.asset_type == "fill_in_the_blanks" else asset
+                for asset in lesson.worksheet_assets
+            ]
+
+    raise AssertionError("Unreachable quality review state")
+
+
 def validate_lessons_content(
     lessons: list[LessonVariant],
     expected_count: int,
@@ -529,7 +486,19 @@ def validate_lessons_content(
 
     minimum_reading_words, maximum_reading_words = get_reading_word_targets(level, duration, options)
 
+    seen_readings = set()
     for lesson in lessons:
+        for field_name in ("title", "lesson_goal", "pair_work_task", "role_play_scenario"):
+            if not getattr(lesson, field_name).strip():
+                raise ValueError(f"Lesson field '{field_name}' must not be empty.")
+        for field_name in ("target_vocabulary", "speaking_questions", "sentence_frames"):
+            items = [" ".join(item.split()).casefold() for item in getattr(lesson, field_name)]
+            if any(not item for item in items) or len(set(items)) != len(items):
+                raise ValueError(f"Lesson field '{field_name}' must contain distinct, non-empty items.")
+        normalized_reading = " ".join(lesson.reading_text.split()).casefold()
+        if normalized_reading in seen_readings:
+            raise ValueError("Lesson variants must have different reading passages.")
+        seen_readings.add(normalized_reading)
         if len(lesson.target_vocabulary) != options.target_vocabulary_count:
             raise ValueError(
                 f"Lesson '{lesson.title}' does not have exactly "
@@ -540,6 +509,7 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' does not have exactly "
                 f"{options.reading_question_count} reading questions."
             )
+        validate_reading_comprehension(lesson, options.reading_question_count)
         if len(lesson.speaking_questions) != options.speaking_question_count:
             raise ValueError(
                 f"Lesson '{lesson.title}' does not have exactly "
@@ -565,6 +535,13 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' reading_text is too long: "
                 f"{reading_word_count} words, expected at most {maximum_reading_words}."
             )
+        if options.include_worksheet_assets:
+            if len(lesson.worksheet_assets) < 5:
+                raise ValueError(f"Lesson '{lesson.title}' does not include enough worksheet assets.")
+            cloze_assets = [asset for asset in lesson.worksheet_assets if asset.asset_type == "fill_in_the_blanks"]
+            if len(cloze_assets) != 1:
+                raise LessonQualityError("Each lesson must include exactly one validated cloze exercise.")
+            validate_cloze_asset(lesson, cloze_assets[0])
         if not options.include_visual_activity:
             continue
         if not lesson.visual_activity:
@@ -576,10 +553,6 @@ def validate_lessons_content(
                 f"Lesson '{lesson.title}' does not have exactly "
                 f"{options.visual_word_count} visual target words."
             )
-        if options.include_worksheet_assets and len(lesson.worksheet_assets) < 5:
-            raise ValueError(f"Lesson '{lesson.title}' does not include enough worksheet assets.")
-
-
 def prepare_lessons_for_frontend(
     lessons: list[LessonVariant],
     level: str,
@@ -663,6 +636,7 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
 
     lessons = [LessonVariant.model_validate(item) for item in parsed_json["lessons"]]
 
+    lessons = attach_lesson_context(lessons, cefr_profile["level"], final_theme, request.duration)
     lessons = normalize_lessons_content(lessons, cefr_profile["level"])
     lessons = await repair_lesson_readings(
         lessons=lessons,
@@ -671,8 +645,12 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         duration=request.duration,
         options=options,
     )
+    for lesson in lessons:
+        await generate_reading_comprehension(lesson, cefr_profile["level"], options.reading_question_count)
     lessons = ensure_visual_activities(lessons, options)
-    lessons = ensure_worksheet_assets(lessons, options)
+    for lesson in lessons:
+        lesson.worksheet_assets = []
+        await repair_lesson_consistency(lesson, cefr_profile["level"], final_theme, request.duration, options)
     validate_lessons_content(
         lessons,
         request.variant_count,
@@ -680,13 +658,6 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         request.duration,
         options,
     )
-    lessons = attach_lesson_context(
-        lessons=lessons,
-        level=cefr_profile["level"],
-        theme=final_theme,
-        duration=request.duration,
-    )
-
     if options.include_images:
         lessons = await attach_images_to_lessons(lessons)
     else:
@@ -718,6 +689,8 @@ async def generate_lesson_variants(request: LessonGenerateRequest) -> LessonGene
     for attempt in range(3):
         try:
             return await try_generate_once(request)
+        except LessonQualityError:
+            raise
         except Exception as e:
             last_error = e
 
