@@ -347,14 +347,18 @@ Run Ollama with `qwen3:14b` and start this backend in its virtual environment:
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-In the frontend repository, create `.env.local` with public configuration only:
+Use the [TutorFlow frontend](https://github.com/cptn3m012/tutorflow-english-frontend).
+In that repository, create `.env.local` with public configuration only:
 
 ```dotenv
 VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_APP_MODE=live
 ```
 
-Restart the frontend with `npm run dev` and open `http://127.0.0.1:5173`.
-The published frontend calls the real API directly. Start with one lesson variant;
+Restart the frontend with `npm run dev` and open `http://127.0.0.1:5173/studio`.
+TutorFlow preserves its demo mode; select **Live API** to call this backend.
+Without local configuration, a fresh checkout opens the authored demo lessons.
+Start with one lesson variant;
 disable images and visual activity for the first connection check. Generation can
 take several minutes.
 
