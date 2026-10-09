@@ -31,16 +31,16 @@ The application is designed for teachers, tutors, and language-learning tools th
 By default, the backend connects to a local Ollama API:
 
 ```text
-http://localhost:11434/api/generate
+http://127.0.0.1:11434/api/generate
 ```
 
 The default model is:
 
 ```text
-qwen3:14b
+gpt-oss:20b
 ```
 
-You can change the Ollama URL and model name in `app/ollama_client.py`.
+Configure the model and Ollama base URL through environment variables or a local `.env` file.
 
 ## Requirements
 
@@ -49,12 +49,12 @@ Before running the project, install:
 - Python 3.12 or newer
 - pip
 - Ollama
-- the `qwen3:14b` Ollama model, or another compatible model configured in `app/ollama_client.py`
+- the `gpt-oss:20b` Ollama model, or another compatible model configured with `OLLAMA_MODEL`
 
 Pull the default Ollama model:
 
 ```bash
-ollama pull qwen3:14b
+ollama pull gpt-oss:20b
 ```
 
 Start Ollama:
@@ -104,6 +104,13 @@ Optional environment variables:
 
 | Variable | Description | Default |
 | --- | --- | --- |
+| `OLLAMA_MODEL` | Local model used for lesson generation and review | `gpt-oss:20b` |
+| `OLLAMA_BASE_URL` | Ollama server base URL; the client appends `/api/generate` | `http://127.0.0.1:11434` |
+| `OLLAMA_NUM_CTX` | Context window in tokens, including the prompt and generated output; allowed range 8192–131072 | `12288` |
+| `OLLAMA_TIMEOUT_SECONDS` | Timeout for each model request; allowed range 1–600 seconds | `180` |
+| `OLLAMA_KEEP_ALIVE` | How long Ollama keeps the model loaded between requests | `10m` |
+| `OLLAMA_REASONING_EFFORT` | GPT-OSS reasoning effort for generation and section repairs: `low`, `medium`, or `high` | `low` |
+| `OLLAMA_REVIEW_REASONING_EFFORT` | GPT-OSS reasoning effort for semantic quality review | `medium` |
 | `OPENVERSE_API_URL` | Openverse image search API URL | `https://api.openverse.org/v1/images/` |
 | `PEXELS_API_URL` | Pexels search API URL | `https://api.pexels.com/v1/search` |
 | `PEXELS_API_KEY` | Optional Pexels API key | unset |
@@ -122,6 +129,29 @@ $env:IMAGE_PROVIDER_MODE="off"
 ```
 
 Local `.env` files are ignored by Git.
+
+### Local model generation
+
+The backend uses Ollama's native `/api/generate` endpoint with a TutorFlow system
+prompt and task-specific sampling and output-token limits. Draft lessons,
+comprehension questions, quality reviews, cloze repairs and image metadata use
+JSON Schema constraints. Reading rewrites return plain passage text. The draft
+schema restricts vocabulary and activity counts to the request and CEFR focus
+choices to the supplied syllabus; later stages add answer evidence and worksheets.
+
+For `gpt-oss`, generation uses low reasoning effort by default and semantic review
+uses medium effort. These settings balance responsiveness with the review's need
+to solve questions and check source evidence. Evaluate these configurable defaults
+with representative lessons to assess generation quality and latency. Ollama returns reasoning in a
+separate field, and TutorFlow consumes only the final `response` as lesson content.
+See Ollama's [thinking controls](https://docs.ollama.com/capabilities/thinking) and
+[structured outputs](https://docs.ollama.com/capabilities/structured-outputs).
+
+An unavailable model, connection failure, timeout or incomplete output returns an
+error without automatically restarting the whole lesson pipeline. Content and
+format repairs have bounded attempts; exhausted section repairs also stop the
+request. Increase context or timeout settings only after checking the requested
+material length and available resources.
 
 ## Run the Application
 
@@ -289,7 +319,8 @@ review rounds with two repair rounds. Structured-output parsing and section gene
 have their own limits of three attempts. Exhausted content repairs return an error rather
 than padding text or restarting the entire lesson generation.
 
-Question generation and quality review use Ollama's JSON Schema `format` parameter.
+Drafts, question generation, quality review, cloze repairs and image metadata use
+Ollama's JSON Schema `format` parameter. Passage rewrites remain plain text.
 Expect an additional question-generation call and at least one quality-review call per
 lesson variant. Semantic review is model-assisted and still requires evaluation against
 teacher-reviewed examples; it does not certify CEFR proficiency or guarantee every answer.
@@ -337,6 +368,7 @@ english-lesson-app-backend/
 |   |   `-- routes_lessons.py
 |   |-- cefr_data.py
 |   |-- cefr_service.py
+|   |-- generation_schemas.py
 |   |-- image_service.py
 |   |-- lesson_service.py
 |   |-- main.py
@@ -362,6 +394,7 @@ english-lesson-app-backend/
 | `app/quality_service.py` | Reviews semantic consistency of readings, answers, and cloze exercises |
 | `app/worksheet_service.py` | Builds and repairs reading-based cloze exercises |
 | `app/ollama_client.py` | Sends generation requests to the local Ollama API |
+| `app/generation_schemas.py` | Defines strict model-output contracts for lesson drafts and image metadata |
 | `app/prompts.py` | Stores prompt builders for lesson generation and image metadata |
 | `app/schemas.py` | Defines Pydantic request and response models |
 | `app/cefr_service.py` | Handles CEFR profile lookup, normalization, and target matching |
@@ -385,7 +418,7 @@ GET, POST, PUT, PATCH and DELETE are allowed through CORS, along with the JSON C
 
 ## Connecting the React Frontend Locally
 
-Run Ollama with `qwen3:14b` and start this backend in its virtual environment:
+Run Ollama with `gpt-oss:20b` and start this backend in its virtual environment:
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -396,12 +429,11 @@ In that repository, create `.env.local` with public configuration only:
 
 ```dotenv
 VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_APP_MODE=live
 ```
 
 Restart the frontend with `npm run dev` and open `http://127.0.0.1:5173/studio`.
-TutorFlow preserves its demo mode; select **Live API** to call this backend.
-Without local configuration, a fresh checkout opens the authored demo lessons.
+TutorFlow 1.0 uses live generation and the backend lesson library. Saved variants
+open on their own `/lessons/{id}` frontend pages.
 Start with one lesson variant;
 disable images and visual activity for the first connection check. Generation can
 take several minutes.
