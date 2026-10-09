@@ -1,6 +1,7 @@
 import base64
 import binascii
 import secrets
+from uuid import UUID
 
 from starlette.exceptions import HTTPException
 from starlette.datastructures import MutableHeaders
@@ -86,10 +87,20 @@ class ShareProtectionMiddleware:
 
 
 class FrontendFiles(StaticFiles):
+    @staticmethod
+    def is_lesson_page(path: str) -> bool:
+        parts = path.replace("\\", "/").strip("/").split("/")
+        if len(parts) != 2 or parts[0] != "lessons":
+            return False
+        try:
+            return str(UUID(parts[1])) == parts[1].lower()
+        except ValueError:
+            return False
+
     async def get_response(self, path, scope):
         try:
             return await super().get_response(path, scope)
         except HTTPException as error:
-            if error.status_code == 404 and path in ("studio", "library"):
+            if error.status_code == 404 and (path in ("studio", "library") or self.is_lesson_page(path)):
                 return await super().get_response("index.html", scope)
             raise
