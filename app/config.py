@@ -16,6 +16,49 @@ def database_url() -> str:
 
 
 @dataclass(frozen=True)
+class OllamaSettings:
+    model: str = "gpt-oss:20b"
+    base_url: str = "http://127.0.0.1:11434"
+    context_tokens: int = 12288
+    timeout_seconds: float = 180.0
+    keep_alive: str = "10m"
+    reasoning_effort: str = "low"
+    review_reasoning_effort: str = "medium"
+
+    @classmethod
+    def from_environment(cls):
+        settings = cls(
+            model=os.getenv("OLLAMA_MODEL", cls.model).strip(),
+            base_url=os.getenv("OLLAMA_BASE_URL", cls.base_url).rstrip("/"),
+            context_tokens=int(os.getenv("OLLAMA_NUM_CTX", str(cls.context_tokens))),
+            timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", str(cls.timeout_seconds))),
+            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", cls.keep_alive),
+            reasoning_effort=os.getenv("OLLAMA_REASONING_EFFORT", cls.reasoning_effort),
+            review_reasoning_effort=os.getenv("OLLAMA_REVIEW_REASONING_EFFORT", cls.review_reasoning_effort),
+        )
+        settings.validate()
+        return settings
+
+    def validate(self):
+        parsed = urlsplit(self.base_url)
+        if (
+            parsed.scheme not in ("http", "https") or not parsed.netloc
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+        ):
+            raise ValueError("OLLAMA_BASE_URL must be an HTTP(S) base URL without credentials or query parameters.")
+        if not self.model:
+            raise ValueError("OLLAMA_MODEL must not be empty.")
+        if not 8192 <= self.context_tokens <= 131072:
+            raise ValueError("OLLAMA_NUM_CTX must be between 8192 and 131072.")
+        if not 1 <= self.timeout_seconds <= 600:
+            raise ValueError("OLLAMA_TIMEOUT_SECONDS must be between 1 and 600.")
+        if any(value not in ("low", "medium", "high") for value in (
+            self.reasoning_effort, self.review_reasoning_effort,
+        )):
+            raise ValueError("Ollama reasoning effort must be low, medium or high.")
+
+
+@dataclass(frozen=True)
 class AppSettings:
     public_share: bool = False
     share_username: str = ""
