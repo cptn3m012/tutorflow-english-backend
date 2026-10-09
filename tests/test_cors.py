@@ -31,7 +31,7 @@ class LocalCorsTests(unittest.TestCase):
         self.assertNotIn("access-control-allow-origin", response.headers)
 
     def test_unneeded_method_and_custom_header_are_rejected(self):
-        for method, headers in (("DELETE", "content-type"), ("POST", "x-private-key")):
+        for method, headers in (("TRACE", "content-type"), ("POST", "x-private-key")):
             with self.subTest(method=method, headers=headers):
                 response = self.client.options("/lessons/generate", headers={
                     "Origin": "http://127.0.0.1:5173",

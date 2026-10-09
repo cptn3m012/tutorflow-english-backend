@@ -17,6 +17,7 @@ The application is designed for teachers, tutors, and language-learning tools th
 - Optionally search for lesson images through Openverse and Pexels.
 - Export generated lessons as PDF files.
 - Preview generated PDFs directly in the browser.
+- Save lesson variants and favourites in a shared PostgreSQL library.
 
 ## Tech Stack
 
@@ -159,6 +160,49 @@ http://127.0.0.1:8000/redoc
 | `POST` | `/lessons/generate` | Generate lesson variants |
 | `POST` | `/lessons/export/pdf` | Export lessons as a downloadable PDF |
 | `POST` | `/lessons/export/pdf/preview` | Preview lessons as an inline PDF |
+| `GET` | `/lessons/saved` | List saved lessons (`limit` up to 100, `offset`) |
+| `GET` | `/lessons/saved/{uuid}` | Read a saved lesson |
+| `PUT` | `/lessons/saved/{uuid}` | Save/import/restore a lesson with an independent UUID |
+| `PATCH` | `/lessons/saved/{uuid}` | Set favourite state with `{ "favorite": true }` |
+| `DELETE` | `/lessons/saved/{uuid}` | Delete a saved lesson |
+
+## Shared lesson database
+
+Use PostgreSQL for the shared library. Copy `.env.example` to `.env` and set:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://tutorflow:CHANGE_ME@127.0.0.1:5432/tutorflow
+```
+
+Create the database and a dedicated login in pgAdmin first; the application login
+should own this database, without superuser, role-creation or database-creation rights.
+URL-encode special characters in the password. `.env` is loaded automatically;
+process environment variables take precedence. Never commit `.env` or database dumps.
+
+The first application startup runs versioned Alembic migrations. It creates the
+`saved_lessons` table, but does not create the PostgreSQL database or login.
+You can also migrate explicitly with `python -m alembic upgrade head`.
+Without `DATABASE_URL`, local development uses the persistent file
+`data/tutorflow.db` (SQLite). An unavailable configured PostgreSQL database produces
+an error; it never silently switches to another database. Changing the URL does
+not move existing data between databases.
+
+Each saved variant stores the full lesson JSON (JSONB in PostgreSQL), level, theme,
+duration, source, timestamp and favourite state. Generate and PDF routes retain
+their existing contracts; generation alone does not add a lesson to the library.
+The frontend explicitly saves selected variants. All visitors share one library;
+this version does not contain separate user accounts or private per-user libraries.
+
+Save payloads match the frontend's versioned browser library: `id`, `saved_at`,
+`favorite`, `level`, `duration`, `theme`, `mode`, `lesson`. Retrying a PUT with the
+same UUID returns the existing record, preserving later favourite changes. DELETE
+is idempotent and PUT can restore a deleted record. Browser imports use the same
+UUIDs, so repeating an import creates no duplicates. Database failures return 503
+without including connection credentials in the response.
+
+Back up PostgreSQL with `pg_dump` or pgAdmin's Backup action. Store backups outside
+Git and test restoration before relying on them. For SQLite, stop the backend
+before copying its database file.
 
 ## Generate Lessons
 
@@ -337,7 +381,7 @@ http://127.0.0.1:4173
 http://localhost:4173
 ```
 
-Only GET and POST are allowed through CORS, along with the JSON Content-Type header. Cross-origin cookies are disabled because the current frontend does not use cookie authentication. Content-Disposition is exposed for PDF downloads. For production, configure exact frontend origins; CORS is not authentication.
+GET, POST, PUT, PATCH and DELETE are allowed through CORS, along with the JSON Content-Type header. Cross-origin cookies are disabled because the current frontend does not use cookie authentication. Content-Disposition is exposed for PDF downloads. For production, configure exact frontend origins; CORS is not authentication.
 
 ## Connecting the React Frontend Locally
 
@@ -367,9 +411,9 @@ Both development servers and Ollama should listen on loopback addresses for loca
 The health endpoint checks FastAPI availability, not model readiness.
 
 Never put secrets into `VITE_*` variables: Vite embeds them in browser code.
-Optional image provider credentials stay in the backend environment. Ignored `.env`
-files are not automatically loaded by this application; use process environment
-variables or Uvicorn's `--env-file` option. Commit only placeholder configuration,
+Optional image provider credentials stay in the backend environment. The ignored `.env`
+file is loaded automatically, with process environment variables taking precedence.
+Commit only placeholder configuration,
 and review `git status` and `git diff --cached` before committing.
 
 Public deployment requires separate HTTPS, authentication and request-limit setup
