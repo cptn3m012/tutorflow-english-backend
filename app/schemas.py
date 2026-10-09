@@ -85,10 +85,10 @@ class PdfExportOptions(BaseModel):
 
 class LessonGenerateRequest(BaseModel):
     level: str = Field(..., example="A2")
-    duration: int = Field(..., example=30)
-    topic: Optional[str] = Field(default=None, example="food")
+    duration: int = Field(..., ge=15, le=180, example=30)
+    topic: Optional[str] = Field(default=None, max_length=500, example="food")
     lesson_date: Optional[str] = Field(default=None, example="2026-12-20")
-    variant_count: int = Field(default=3, example=3)
+    variant_count: int = Field(default=3, ge=1, le=3, example=3)
     advanced_options: LessonAdvancedOptions = Field(default_factory=LessonAdvancedOptions)
 
     @model_validator(mode="after")

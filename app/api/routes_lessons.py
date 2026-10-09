@@ -98,9 +98,13 @@ async def get_pdf_options_endpoint():
 
 
 @router.post("/generate", response_model=LessonGenerateResponse)
-async def generate_lessons_endpoint(request: LessonGenerateRequest):
+async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request: Request):
+    slots = http_request.app.state.generation_slots
+    if slots.locked():
+        raise HTTPException(status_code=429, detail="A lesson is already being generated. Please wait and try again.", headers={"Retry-After": "30"})
     try:
-        return await generate_lesson_variants(request)
+        async with slots:
+            return await generate_lesson_variants(request)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:

@@ -27,6 +27,14 @@ env/
 
 # Generated/sample exports
 sample-*.pdf
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+backups/
+*.dump
+*.backup
 
 # OS files
 .DS_Store
