@@ -2,11 +2,12 @@ import json
 from datetime import datetime, UTC
 
 from app.errors import LessonQualityError
+from app.generation_schemas import build_lesson_draft_schema
 from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
 from app.quality_service import review_lesson_quality
 from app.worksheet_service import build_fill_in_the_blanks_asset, repair_cloze_asset, validate_cloze_asset
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
-from app.ollama_client import generate_from_ollama
+from app.ollama_client import OllamaError, generate_from_ollama
 from app.schemas import (
     CefrProfile,
     LessonAdvancedOptions,
@@ -89,7 +90,8 @@ def build_reading_wording_guidance(
     minimum, maximum = get_reading_word_targets(level, duration, options)
     return (
         f"reading_text must be between {minimum} and {maximum} words for this "
-        f"{duration}-minute {level} lesson"
+        f"{duration}-minute {level} lesson; aim for about {(minimum + maximum) // 2} words, "
+        "comfortably inside the range"
     )
 
 
@@ -126,6 +128,8 @@ async def rewrite_reading_text_if_needed(
         if current_word_count < minimum_words:
             rewrite_feedback = (
                 f"The current version is too short at {current_word_count} words. "
+                f"Add approximately {(minimum_words + maximum_words) // 2 - current_word_count} words "
+                "of meaningful events, descriptions or dialogue connected to the existing passage. "
                 f"Return a fuller version with at least {minimum_words} words and no more than {maximum_words} words."
             )
         elif current_word_count > maximum_words:
@@ -151,7 +155,7 @@ async def rewrite_reading_text_if_needed(
             maximum_words=maximum_words,
             rewrite_feedback=rewrite_feedback,
         )
-        rewritten_text = (await generate_from_ollama(prompt)).strip()
+        rewritten_text = (await generate_from_ollama(prompt, task="reading")).strip()
         cleaned_text = rewritten_text.strip().strip('"').strip()
 
         if cleaned_text:
@@ -187,17 +191,20 @@ def normalize_lessons_content(lessons: list[LessonVariant], level: str) -> list[
     for lesson in lessons:
         normalized_items = [normalize_cefr_focus_item(item, level) for item in lesson.cefr_focus]
 
-        communication_focus = next(
-            (item for item in normalized_items if item in category_targets["communication"]),
-            None,
+        communication_focus = (
+            lesson.communication_focus if lesson.communication_focus in category_targets["communication"] else next(
+                (item for item in normalized_items if item in category_targets["communication"]), None,
+            )
         )
-        vocabulary_focus = next(
-            (item for item in normalized_items if item in category_targets["vocabulary"]),
-            None,
+        vocabulary_focus = (
+            lesson.vocabulary_focus if lesson.vocabulary_focus in category_targets["vocabulary"] else next(
+                (item for item in normalized_items if item in category_targets["vocabulary"]), None,
+            )
         )
-        grammar_focus = next(
-            (item for item in normalized_items if item in category_targets["grammar"]),
-            None,
+        grammar_focus = (
+            lesson.grammar_focus if lesson.grammar_focus in category_targets["grammar"] else next(
+                (item for item in normalized_items if item in category_targets["grammar"]), None,
+            )
         )
 
         communication_text = " ".join([
@@ -623,7 +630,10 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         extra_instructions=options.extra_instructions,
     )
 
-    raw_response = await generate_from_ollama(prompt)
+    raw_response = await generate_from_ollama(
+        prompt, json_schema=build_lesson_draft_schema(request.variant_count, options, cefr_profile),
+        task="lesson",
+    )
 
     try:
         cleaned_json = extract_json_from_text(raw_response)
@@ -689,7 +699,7 @@ async def generate_lesson_variants(request: LessonGenerateRequest) -> LessonGene
     for attempt in range(3):
         try:
             return await try_generate_once(request)
-        except LessonQualityError:
+        except (LessonQualityError, OllamaError):
             raise
         except Exception as e:
             last_error = e

@@ -22,6 +22,7 @@ async def review_lesson_quality(lesson: LessonVariant, level: str) -> list[Lesso
         raw_response = await generate_from_ollama(
             build_lesson_quality_prompt(context, feedback),
             json_schema=LessonQualityReview.model_json_schema(),
+            task="review",
         )
         try:
             review = LessonQualityReview.model_validate_json(raw_response)

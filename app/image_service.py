@@ -4,6 +4,7 @@ import os
 import httpx
 
 from app.ollama_client import generate_from_ollama
+from app.generation_schemas import IMAGE_METADATA_SCHEMA
 from app.prompts import build_image_metadata_prompt
 from app.schemas import LessonVariant, LessonImage
 
@@ -71,7 +72,7 @@ async def generate_image_metadata_for_lesson(lesson: LessonVariant) -> LessonVar
         role_play_scenario=lesson.role_play_scenario
     )
 
-    raw_response = await generate_from_ollama(prompt)
+    raw_response = await generate_from_ollama(prompt, json_schema=IMAGE_METADATA_SCHEMA, task="image_metadata")
 
     try:
         cleaned_json = extract_json_from_text(raw_response)
