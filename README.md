@@ -416,9 +416,6 @@ file is loaded automatically, with process environment variables taking preceden
 Commit only placeholder configuration,
 and review `git status` and `git diff --cached` before committing.
 
-Public deployment requires separate HTTPS, authentication and request-limit setup
-before exposing generation. Keep Ollama's port 11434 private.
-
 ## Security Notes
 
 - API keys are not hardcoded in the source code.
@@ -457,6 +454,13 @@ python -m unittest discover -s tests -v
 The tests use controlled model responses to verify dependency rebuilding, evidence checks,
 bounded repairs, word boundaries, API compatibility, and PDF answer visibility. They do
 not benchmark the live model's generation quality or latency.
+
+Database tests use isolated SQLite files to check migrations, restart persistence,
+UUID retries, pagination, favourites, deletion/undo and safe database errors.
+Additional API tests cover authentication, same-origin writes, upload limits,
+generation capacity and frontend routing. On 9 October 2026, all 59 backend tests
+passed. A browser integration check also verified saved lesson persistence,
+favourites and deletion/undo against PostgreSQL in two isolated browser sessions.
 
 The backend is ready for local lesson generation and PDF export. Before production deployment, configure environment-specific values such as allowed CORS origins, Ollama model settings, and any optional image provider credentials.
 
