@@ -118,7 +118,7 @@ async def repair_cloze_asset(lesson: LessonVariant, feedback: str) -> LessonWork
     last_error = feedback
     for _ in range(3):
         raw_response = await generate_from_ollama(
-            build_cloze_repair_prompt(context, last_error), json_schema=ClozeExercise.model_json_schema(),
+            build_cloze_repair_prompt(context, last_error), json_schema=ClozeExercise.model_json_schema(), task="cloze",
         )
         try:
             exercise = ClozeExercise.model_validate_json(raw_response)

@@ -21,14 +21,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendDirectory 'package.json')))
     throw 'FrontendPath must point to the TutorFlow frontend repository.'
 }
 
-$variableNames = @('VITE_API_BASE_URL', 'VITE_APP_MODE', 'VITE_LIBRARY_STORAGE', 'PUBLIC_SHARE_MODE', 'FRONTEND_DIST_DIR')
+$variableNames = @('VITE_API_BASE_URL', 'PUBLIC_SHARE_MODE', 'FRONTEND_DIST_DIR')
 $previousValues = @{}
 foreach ($name in $variableNames) { $previousValues[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 try {
     $env:VITE_API_BASE_URL = '/api'
-    $env:VITE_APP_MODE = 'live'
-    $env:VITE_LIBRARY_STORAGE = 'database'
     Push-Location -LiteralPath $frontendDirectory
     try {
         & npm.cmd run build

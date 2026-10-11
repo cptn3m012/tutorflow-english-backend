@@ -39,7 +39,7 @@ async def generate_reading_comprehension(
         prompt = build_reading_comprehension_prompt(
             level, lesson.title, lesson.lesson_goal, lesson.reading_text, question_count, last_error,
         )
-        raw_response = await generate_from_ollama(prompt, json_schema=schema)
+        raw_response = await generate_from_ollama(prompt, json_schema=schema, task="comprehension")
         try:
             result = ReadingComprehension.model_validate_json(raw_response)
             candidate = lesson.model_copy(update={

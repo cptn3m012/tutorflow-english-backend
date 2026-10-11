@@ -92,14 +92,14 @@ Rules:
 - choose only grammar and communicative aims that match the supplied CEFR profile
 - choose vocabulary that fits both the topic and the supplied CEFR vocabulary areas
 - do not introduce skills that belong to a higher level unless they are explicitly listed in the supplied profile
-- focus mainly on speaking, but include a substantial reading section
-- follow the requested primary skill focus and lesson style
+- prioritize the requested primary skill focus and lesson style while including vocabulary, reading and speaking
 - reading_text must be appropriate for {level}
 - {reading_wording_guidance}
 - reading_text should feel like a real mini reading passage, not 2-3 simple sentences
-- reading_text should usually be 2 short paragraphs or 1 well-developed paragraph
+- organize reading_text into connected paragraphs appropriate for the required word range; longer readings need more developed paragraphs
 - reading questions and their answer key will be generated separately from the final reading; do not include them
 - target_vocabulary must contain exactly {target_vocabulary_count} items
+- use at least {min(4, target_vocabulary_count)} different target vocabulary items in their exact supplied forms across distinct complete sentences in reading_text
 - speaking_questions must contain exactly {speaking_question_count} items
 - sentence_frames must contain exactly {sentence_frame_count} items
 - communication_focus must be copied exactly from the supplied communication targets
@@ -209,6 +209,8 @@ def build_reading_rewrite_prompt(
     rewrite_feedback: str = "",
 ) -> str:
     vocabulary_list = ", ".join(target_vocabulary)
+    target_words = (minimum_words + maximum_words) // 2
+    paragraph_count = max(1, (target_words + 99) // 100)
 
     return f"""
 You rewrite one reading passage for an English lesson.
@@ -238,7 +240,9 @@ Task:
 - write passage content only; do not describe the lesson, the reader or the learning process
 - make it feel like a real short reading passage
 - produce between {minimum_words} and {maximum_words} words
-- use either one well-developed paragraph or two short paragraphs
+- aim for approximately {target_words} words, comfortably inside the required range
+- use about {paragraph_count} connected paragraphs, with approximately {target_words // paragraph_count} words each
+- develop concrete events, descriptions or dialogue; do not add repetitive filler to reach the length
 - do not add questions
 - do not add headings
 - do not add bullet points

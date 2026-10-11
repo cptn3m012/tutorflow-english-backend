@@ -83,12 +83,15 @@ class SharingTests(unittest.TestCase):
             (dist / "index.html").write_text("<html>TutorFlow test</html>", encoding="utf-8")
             application = create_app(AppSettings(frontend_dist=dist))
             with TestClient(application) as client:
-                for path in ("/", "/studio", "/library"):
+                for path in ("/", "/studio", "/library", "/lessons/9ae5c8b1-b5d0-4e12-8ea8-a2f2b4c87d94"):
                     response = client.get(path)
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertIn("TutorFlow test", response.text)
                 self.assertEqual(client.get("/assets/missing.js").status_code, 404)
                 self.assertEqual(client.get("/api/not-an-endpoint").status_code, 404)
+                self.assertEqual(client.get("/lessons/saved/not-a-lesson").status_code, 422)
+                self.assertEqual(client.get("/lessons/not-a-uuid").status_code, 404)
+                self.assertEqual(client.get("/lessons/9ae5c8b1-b5d0-4e12-8ea8-a2f2b4c87d94/extra").status_code, 404)
                 self.assertEqual(client.get("/%2e%2e/.env").status_code, 404)
                 self.assertIn("LessonGenerateRequest", client.get("/api/openapi.json").json()["components"]["schemas"])
 
