@@ -100,7 +100,7 @@ class SavedLessonTests(unittest.TestCase):
 
     def test_migration_version_is_recorded(self):
         with self.engine.connect() as connection:
-            self.assertEqual(connection.scalar(text("select version_num from alembic_version")), "0001_saved_lessons")
+            self.assertEqual(connection.scalar(text("select version_num from alembic_version")), "0002_lesson_pictures")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import AppSettings
 from app.api.routes_lessons import router as lessons_router
 from app.api.routes_saved_lessons import router as saved_lessons_router
+from app.api.routes_pictures import router as pictures_router
 from app.database import get_engine, migrate_database
 from app.sharing import FrontendFiles, ShareProtectionMiddleware
 
@@ -30,6 +31,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         title="English Lesson App Backend", version="1.1.0", lifespan=lifespan,
     )
     application.state.generation_slots = asyncio.Semaphore(1)
+    application.state.picture_job_lock = asyncio.Lock()
+    application.state.picture_wakeup = asyncio.Event()
 
     @application.exception_handler(SQLAlchemyError)
     async def database_error(request: Request, error: SQLAlchemyError):
@@ -62,6 +65,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     for prefix in ("", "/api"):
         application.include_router(lessons_router, prefix=prefix)
         application.include_router(saved_lessons_router, prefix=prefix)
+        application.include_router(pictures_router, prefix=prefix)
     if settings.frontend_dist:
         application.mount("/", FrontendFiles(directory=settings.frontend_dist, html=True), name="frontend")
     return application

@@ -3,12 +3,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import SavedLessonRecord
+from app.models import PictureJobRecord, SavedLessonRecord
 from app.saved_lesson_schemas import FavoriteUpdate, SavedLesson, SavedLessonPage
 
 router = APIRouter(prefix="/lessons/saved", tags=["Saved lessons"])
@@ -95,6 +95,7 @@ def update_favorite(lesson_id: UUID, payload: FavoriteUpdate, session: DatabaseS
 def delete_saved_lesson(lesson_id: UUID, session: DatabaseSession):
     record = session.get(SavedLessonRecord, str(lesson_id))
     if record is not None:
+        session.execute(delete(PictureJobRecord).where(PictureJobRecord.lesson_id == str(lesson_id)))
         session.delete(record)
         session.commit()
     return Response(status_code=204)
