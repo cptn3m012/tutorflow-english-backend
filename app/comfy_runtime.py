@@ -39,16 +39,18 @@ async def comfy_runtime(settings: ImageSettings):
     log = (root / "comfy-managed.log").open("ab")
     process = None
     try:
-        process = await asyncio.create_subprocess_exec(
+        # Uvicorn --reload uses a SelectorEventLoop on Windows, which does not
+        # implement asyncio subprocesses. Popen works under both loop types.
+        process = subprocess.Popen([
             str(python), str(main), "--listen", host, "--port", str(parsed.port or 80),
             "--disable-all-custom-nodes", "--offline", "--disable-auto-launch", "--disable-metadata",
-            "--cache-none", "--disable-dynamic-vram", cwd=main.parent, env=environment,
+            "--cache-none", "--disable-dynamic-vram"], cwd=main.parent, env=environment,
             stdout=log, stderr=log, **options,
         )
         async with httpx.AsyncClient(timeout=2) as client:
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
-                if process.returncode is not None:
+                if process.poll() is not None:
                     raise PictureError("The dedicated picture runtime stopped during startup. Check its local logs.")
                 try:
                     response = await client.get(f"{settings.comfy_url}/system_stats")
@@ -62,21 +64,20 @@ async def comfy_runtime(settings: ImageSettings):
                 raise PictureError("The dedicated picture runtime did not start in time.")
         yield
     finally:
-        if process and process.returncode is None:
+        if process and process.poll() is None:
             if os.name == "nt":
                 # The Windows venv redirector starts a child interpreter. Kill only
                 # the process tree created above; never a pre-existing service.
-                stopper = await asyncio.create_subprocess_exec(
-                    "taskkill", "/PID", str(process.pid), "/T", "/F",
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                await asyncio.to_thread(subprocess.run,
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
-                await asyncio.wait_for(stopper.wait(), 10)
             else:
                 process.terminate()
             try:
-                await asyncio.wait_for(process.wait(), 10)
-            except asyncio.TimeoutError:
+                await asyncio.to_thread(process.wait, timeout=10)
+            except subprocess.TimeoutExpired:
                 process.kill()
-                await process.wait()
+                await asyncio.to_thread(process.wait, timeout=10)
         log.close()
