@@ -13,6 +13,8 @@ class SavedLessonRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Working copies support pictures before an explicit save to the library.
+    is_draft: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     level: Mapped[str] = mapped_column(String(2), index=True)
     duration: Mapped[int] = mapped_column(Integer)
     theme: Mapped[str] = mapped_column(String(500))

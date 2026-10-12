@@ -10,13 +10,43 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.api.routes_saved_lessons import DatabaseSession, find_lesson
+from app.api.routes_saved_lessons import DatabaseSession, find_lesson, to_lesson
 from app.config import ImageSettings
 from app.models import ACTIVE_PICTURE_STATES, LessonImageRecord, PictureJobRecord, SavedLessonRecord
 from app.picture_schemas import PictureJob, PictureRequest
 from app.picture_storage import image_path
+from app.saved_lesson_schemas import SavedLesson
 
 router = APIRouter(tags=["Lesson pictures"])
+
+
+@router.put("/lessons/picture-drafts/{lesson_id}", response_model=SavedLesson)
+def prepare_picture_draft(lesson_id: UUID, payload: SavedLesson, session: DatabaseSession):
+    if lesson_id != payload.id:
+        raise HTTPException(422, "Path ID must match the working lesson ID.")
+    if not ImageSettings.from_environment().enabled:
+        raise HTTPException(503, "Local picture generation is not configured.")
+    existing = session.get(SavedLessonRecord, str(lesson_id))
+    if existing:
+        return to_lesson(existing)
+    record = SavedLessonRecord(
+        id=str(lesson_id), saved_at=payload.saved_at, favorite=False, is_draft=True,
+        level=payload.level, duration=payload.duration, theme=payload.theme,
+        mode=payload.mode, lesson=payload.lesson.model_dump(mode="json"),
+    )
+    session.add(record)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        return to_lesson(find_lesson(session, lesson_id, allow_draft=True))
+    session.refresh(record)
+    return to_lesson(record)
+
+
+@router.get("/lessons/picture-drafts/{lesson_id}", response_model=SavedLesson)
+def get_picture_draft(lesson_id: UUID, session: DatabaseSession):
+    return to_lesson(find_lesson(session, lesson_id, allow_draft=True))
 
 
 @router.get("/lessons/pictures/settings")
@@ -27,7 +57,7 @@ def picture_settings():
 
 @router.get("/lessons/saved/{lesson_id}/picture-jobs", response_model=PictureJob | None)
 def latest_picture_job(lesson_id: UUID, session: DatabaseSession):
-    find_lesson(session, lesson_id)
+    find_lesson(session, lesson_id, allow_draft=True)
     return session.scalar(select(PictureJobRecord).where(PictureJobRecord.lesson_id == str(lesson_id))
                           .order_by(PictureJobRecord.created_at.desc(), PictureJobRecord.id).limit(1))
 
@@ -38,7 +68,7 @@ async def create_picture_job(lesson_id: UUID, payload: PictureRequest, request: 
     if not settings.enabled:
         raise HTTPException(503, "Local picture generation is not configured.")
     async with request.app.state.picture_job_lock:
-        find_lesson(session, lesson_id)
+        find_lesson(session, lesson_id, allow_draft=True)
         active = session.scalar(select(PictureJobRecord).where(
             PictureJobRecord.lesson_id == str(lesson_id), PictureJobRecord.status.in_(ACTIVE_PICTURE_STATES)))
         if active:

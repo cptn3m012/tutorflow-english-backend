@@ -92,7 +92,7 @@ class SavedLessonTests(unittest.TestCase):
 
     def test_database_errors_are_safe_and_do_not_claim_save_success(self):
         error = OperationalError("sensitive SQL", {}, Exception("password=secret"))
-        with patch("sqlalchemy.orm.Session.get", side_effect=error):
+        with patch("sqlalchemy.orm.Session.scalar", side_effect=error):
             response = self.save()
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("secret", response.text)
@@ -100,7 +100,7 @@ class SavedLessonTests(unittest.TestCase):
 
     def test_migration_version_is_recorded(self):
         with self.engine.connect() as connection:
-            self.assertEqual(connection.scalar(text("select version_num from alembic_version")), "0002_lesson_pictures")
+            self.assertEqual(connection.scalar(text("select version_num from alembic_version")), "0003_picture_drafts")
 
 
 if __name__ == "__main__":

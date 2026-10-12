@@ -147,12 +147,19 @@ standalone ComfyUI in this mode. Alternatively, `scripts/start-images.ps1` start
 an installed standalone service in the background on Windows.
 Keep one backend worker: text and picture generation share one GPU semaphore.
 
-After saving a lesson, create a job with
+Create a job for a saved lesson with
 `POST /lessons/saved/{lesson_id}/picture-jobs` and `{"style":"photo"}` or
 `{"style":"illustration"}`. Read the latest job with `GET` at the same path.
 `GET /lessons/saved/{lesson_id}/picture-jobs/{job_id}/events` streams progress as SSE.
 Generated files are available through authenticated `/lesson-images/{asset_id}`
 endpoints; browser requests cannot supply a workflow, model filename or local path.
+
+Pictures can also be generated before saving to the library. Create an idempotent
+working copy with `PUT /lessons/picture-drafts/{lesson_id}` using the lesson payload,
+then use the same picture job endpoints with its UUID. Retrieve its latest content
+with `GET /lessons/picture-drafts/{lesson_id}`. Working copies are excluded from
+library listings and saved-lesson views. An explicit `PUT /lessons/saved/{lesson_id}`
+promotes the working copy, retaining its canonical picture and any active job.
 
 The small Qwen model plans scenes, avoiding an extra reload of the lesson LLM.
 It observes pixels before seeing any planned object list. Questions

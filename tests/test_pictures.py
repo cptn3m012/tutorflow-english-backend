@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import AppSettings, ImageSettings
 from app.database import build_engine, get_session, migrate_database
 from app.main import create_app
-from app.models import LessonImageRecord, PictureJobRecord
+from app.models import LessonImageRecord, PictureJobRecord, SavedLessonRecord
 from app.picture_storage import image_path, write_image
 from tests.helpers import make_lesson
 
@@ -56,6 +56,33 @@ class PictureTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.url).json()["status"], "queued")
         self.assertEqual(self.client.get(f"/lessons/saved/{self.lesson_id}").json()["lesson"], self.payload["lesson"])
 
+    def test_picture_draft_stays_outside_library_until_explicit_save(self):
+        draft_id = str(uuid4())
+        payload = dict(self.payload, id=draft_id)
+        draft_url = f"/lessons/picture-drafts/{draft_id}"
+        self.assertEqual(self.client.put(draft_url, json=payload).status_code, 200)
+        self.assertEqual(self.client.get("/lessons/saved").json()["total"], 1)
+        self.assertEqual(self.client.get(f"/lessons/saved/{draft_id}").status_code, 404)
+        self.assertEqual(self.client.patch(f"/lessons/saved/{draft_id}", json={"favorite": True}).status_code, 404)
+        self.assertEqual(self.client.post(f"/lessons/saved/{draft_id}/picture-jobs", json={}).status_code, 202)
+        # A completed worker update must survive stale browser save/retry bodies.
+        with Session(self.engine) as session:
+            record = session.get(SavedLessonRecord, draft_id)
+            record.lesson = {**record.lesson, "picture_marker": "canonical worker update"}
+            session.commit()
+        self.assertIn("picture_marker", self.client.put(draft_url, json=payload).json()["lesson"])
+        saved = self.client.put(f"/lessons/saved/{draft_id}", json=payload)
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["lesson"]["picture_marker"], "canonical worker update")
+        self.assertEqual(self.client.get("/lessons/saved").json()["total"], 2)
+        self.assertEqual(self.client.get(f"/lessons/saved/{draft_id}").status_code, 200)
+        self.assertEqual(self.client.get(draft_url).status_code, 200)
+        self.assertEqual(self.client.put(f"/lessons/saved/{draft_id}", json=payload).json(), saved.json())
+
+    def test_draft_creation_validates_content_and_path_id(self):
+        self.assertEqual(self.client.put(f"/lessons/picture-drafts/{uuid4()}", json=self.payload).status_code, 422)
+        self.assertEqual(self.client.put(f"/lessons/picture-drafts/{self.lesson_id}", json={}).status_code, 422)
+
     def test_api_does_not_accept_workflows_paths_prompts_or_unknown_styles(self):
         for body in ({"workflow": {}}, {"path": "../../.env"}, {"prompt": "anything"}, {"style": "unknown"}):
             self.assertEqual(self.client.post(self.url, json=body).status_code, 422)
@@ -94,8 +121,10 @@ class PictureTests(unittest.TestCase):
         protected = create_app(AppSettings(public_share=True, share_username="tester", share_password="test-password-long-enough"))
         protected.dependency_overrides[get_session] = self.app.dependency_overrides[get_session]
         with patch("app.main.migrate_database"), patch("app.main.get_engine", return_value=self.engine), TestClient(protected) as client:
-            for url in (self.url, f"/lesson-images/{uuid4()}", "/lessons/pictures/settings"):
+            for url in (self.url, f"/lesson-images/{uuid4()}", "/lessons/pictures/settings",
+                        f"/lessons/picture-drafts/{self.lesson_id}"):
                 self.assertEqual(client.get(url).status_code, 401)
+            self.assertEqual(client.put(f"/lessons/picture-drafts/{uuid4()}", json=self.payload).status_code, 401)
             self.assertEqual(client.get(self.url, auth=("tester", "test-password-long-enough")).status_code, 200)
 
     def test_completed_events_close_and_wrong_lesson_cannot_subscribe(self):
