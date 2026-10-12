@@ -71,6 +71,27 @@ class PicturePdfTests(unittest.TestCase):
         self.assertIn(pdf_literal("Evidence: The blue cup is visible on the table."), pdf)
         self.assertNotIn(b"Wrong answer", pdf)
 
+    def test_discussion_keys_are_examples_and_student_receives_words_and_starters_only(self):
+        visual = {**self.visual, "target_words": ["privacy", "surveillance"],
+                  "sentence_frames": ["Surveillance may affect privacy because ____."],
+                  "questions": [{"kind": "discussion", "question": "Could this camera affect privacy?",
+                                 "answer": "It might affect privacy.", "evidence": "A camera is visible; opinions differ.",
+                                 "object_names": ["camera"], "target_words": ["privacy"]}]}
+        with Session(self.engine) as session:
+            record = session.get(LessonImageRecord, self.asset_id)
+            record.metadata_json = {"visual_activity": visual}
+            session.commit()
+        teacher = self.build(teacher=True)
+        student = self.build()
+        self.assertIn(pdf_literal("Example answer: It might affect privacy."), teacher)
+        self.assertNotIn(pdf_literal("Example answer: It might affect privacy."), student)
+        self.assertNotIn(pdf_literal("Discussion basis: A camera is visible; opinions differ."), student)
+        self.assertIn(pdf_literal("Words to use: privacy, surveillance"), student)
+        self.assertIn(pdf_literal("- Surveillance may affect privacy because ____."), student)
+
+    def test_unicode_hyphens_remain_readable_in_pdf_text(self):
+        self.assertEqual(pdf_literal("data\u2011privacy at the town\u2011hall"), pdf_literal("data-privacy at the town-hall"))
+
     def test_missing_file_unknown_uuid_and_mismatched_versions_are_rejected(self):
         self.lesson["visual_activity"]["asset_id"] = str(uuid4())
         with self.assertRaisesRegex(ValueError, "different image versions"):

@@ -444,7 +444,8 @@ def parse_jpeg_size(data: bytes) -> tuple[int, int]:
 
 
 def normalize_text(value: str) -> str:
-    return " ".join(str(value).replace("\r", " ").replace("\n", " ").split())
+    value = str(value).translate(str.maketrans({"\u2010": "-", "\u2011": "-", "\u2013": "-", "\u2014": "-"}))
+    return " ".join(value.replace("\r", " ").replace("\n", " ").split())
 
 
 def pdf_literal(value: str) -> bytes:
@@ -496,6 +497,7 @@ def add_worksheet_assets(doc: PdfDocument, assets: list[LessonWorksheetAsset], n
 def add_reading_answer_key(doc: PdfDocument, lesson: LessonVariant):
     if not doc.options.include_answers or not lesson.reading_answers:
         return
+    doc.ensure_space(120)
     add_section(doc, 99, "Reading answer key")
     for index, item in enumerate(lesson.reading_answers, start=1):
         doc.text(f"{index}. {item.question}", size=10, bold=True, indent=8, gap=2)
@@ -557,12 +559,22 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int, picture_asse
             doc.draw_jpeg_data_url(picture_assets[asset_id], max_height=320)
         doc.text(lesson.visual_activity.title, size=11, bold=True, indent=8)
         doc.text(lesson.visual_activity.instruction, size=10, indent=8)
-        doc.text("Target words: " + ", ".join(lesson.visual_activity.target_words), size=10, indent=8, color=MUTED_COLOR)
+        doc.text("Words to use: " + ", ".join(lesson.visual_activity.target_words), size=10, indent=8, color=MUTED_COLOR)
+        if lesson.visual_activity.sentence_frames:
+            doc.text("Sentence starters", size=10, bold=True, indent=8)
+            add_bullets(doc, lesson.visual_activity.sentence_frames, size=9)
         for number, item in enumerate(lesson.visual_activity.questions, start=1):
+            kind = item.get("kind", "observation")
+            if item.get("kind"):
+                label = {"observation": "Look and describe", "application": "Use the lesson", "discussion": "Discuss"}.get(kind, "Look and describe")
+                doc.ensure_space(75)
+                doc.text(label, size=9, bold=True, indent=8, color=MUTED_COLOR)
             doc.text(f"{number}. {item['question']}", size=10, indent=8)
             if doc.options.include_answers:
-                doc.text(f"Answer: {item['answer']}", size=10, indent=16, color=MUTED_COLOR)
-                doc.text(f"Evidence: {item['evidence']}", size=9, indent=16, color=MUTED_COLOR)
+                answer_label = "Answer" if kind == "observation" else "Example answer"
+                basis_label = "Evidence" if kind == "observation" else "Discussion basis"
+                doc.text(f"{answer_label}: {item['answer']}", size=10, indent=16, color=MUTED_COLOR)
+                doc.text(f"{basis_label}: {item['evidence']}", size=9, indent=16, color=MUTED_COLOR)
             doc.answer_space(2)
         if not lesson.visual_activity.questions and lesson.visual_activity.answer_key and doc.options.include_answers:
             doc.text(
