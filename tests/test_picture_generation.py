@@ -94,7 +94,7 @@ class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
                 TopicRelevanceReview.model_validate(data)
 
     async def test_questions_are_constrained_to_blindly_observed_objects(self):
-        observed = observation().model_dump(exclude={"questions"})
+        observed = observation().model_dump(exclude={"questions", "sentence_frames"})
         with patch("app.picture_generation.vision_json", new_callable=AsyncMock, side_effect=[
             json.dumps(observed), json.dumps({"questions": observation().model_dump()["questions"]}),
         ]) as vision:
@@ -130,7 +130,7 @@ class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
             result = await review_scene_topic(picture_bytes(), {}, plan, ImageSettings(), observed)
         self.assertTrue(result.faithful)
         model.assert_awaited_once()
-        self.assertEqual([call.args[0] for call in unload.await_args_list], [ImageSettings().vision_model, ImageSettings().planner_model])
+        self.assertEqual([call.args[0] for call in unload.await_args_list], [ImageSettings().vision_model])
 
     def test_duplicate_sightings_do_not_duplicate_the_word_bank(self):
         data = observation().model_dump()
@@ -243,7 +243,8 @@ class PictureWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session.get(PictureJobRecord, self.job["id"]).status, "failed")
 
     async def test_worker_waits_for_text_generation_and_publishes_image_with_questions_atomically(self):
-        metadata = {"model": self.job["model"], "vision_model": "test", "seed": 42, "style": "photo", "observation": observation().model_dump()}
+        metadata = {"model": self.job["model"], "vision_model": "test", "seed": 42, "style": "photo", "observation": observation().model_dump(),
+                    "practice_words": ["menu", "tea", "bill", "waiter"]}
         await self.app.state.generation_slots.acquire()
         with patch("app.picture_worker.prepare_picture", new_callable=AsyncMock, return_value=(picture_bytes(), metadata)) as prepare, \
              patch("app.picture_worker.free_comfy", new_callable=AsyncMock), patch("app.picture_worker.unload_ollama", new_callable=AsyncMock):
@@ -260,6 +261,8 @@ class PictureWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(lesson.lesson["reading_text"], self.original["reading_text"])
             self.assertEqual(lesson.lesson["visual_activity"]["asset_id"], lesson.lesson["primary_image"]["asset_id"])
             self.assertEqual(lesson.lesson["visual_activity"]["questions"], metadata["observation"]["questions"])
+            self.assertEqual(lesson.lesson["visual_activity"]["target_words"], ["menu", "tea", "bill", "waiter"])
+            self.assertIn("cup", lesson.lesson["visual_activity"]["visible_objects"])
             self.assertEqual(session.get(LessonImageRecord, job.asset_id).metadata_json["seed"], 42)
 
     def test_restart_requeues_interrupted_jobs(self):

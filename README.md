@@ -172,8 +172,19 @@ The planner also specifies incompatible object types for that particular scene.
 Clearly observed excluded props reject an image even when a general vision verdict
 would approve it; ordinary objects appropriate to another lesson remain available.
 The image check assesses required-object presence visually, including natural synonyms.
-Questions are prepared only after acceptance and refer to observed objects central
-to the lesson topic. A picture missing essential objects or contradicting the topic
+Scene plans link selected original vocabulary to visible cues or meaningful discussion.
+Abstract concepts may use a representative illustrative scenario, anchored to the reading
+and explicitly distinguished from events narrated in it. Prominent garbled lettering
+requires regeneration; words are rendered separately in the interface and PDF.
+Pictures avoid text-heavy screens and generic lectures about the topic.
+Questions are prepared after acceptance by the text planner, using blind observations.
+An activity has one factual observation, one lesson application and one open discussion
+prompt, all anchored in visible objects. Application and discussion use original lesson vocabulary;
+abstract words are not forced into factual observations. Application and
+discussion answers are examples, not uniquely correct facts. Vocabulary coverage,
+sentence starters and a separate activity review are validated before publication.
+Used vocabulary is identified from the actual question and answer text rather than model-supplied tags.
+Question repairs keep the accepted picture. A picture missing essential objects or contradicting the topic
 is regenerated once with targeted feedback; failure keeps the text and previous picture intact.
 Pictures and corresponding activities are published in one database transaction.
 Both PDF editions embed the stored image; only the teacher edition contains answers

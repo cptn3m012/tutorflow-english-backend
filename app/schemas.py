@@ -120,6 +120,8 @@ class LessonVisualActivity(BaseModel):
     instruction: str
     scene_prompt: str
     target_words: List[str] = Field(default_factory=list)
+    visible_objects: List[str] = Field(default_factory=list)
+    sentence_frames: List[str] = Field(default_factory=list)
     answer_key: List[str] = Field(default_factory=list)
     asset_id: Optional[str] = None
     verified: bool = False

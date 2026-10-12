@@ -51,12 +51,14 @@ def attach_picture(engine, job: dict, content: bytes, metadata: dict, settings: 
         if lesson is None or record is None:
             return
         observation = metadata["observation"]
-        words = [obj["name"] for obj in observation["objects"]]
+        visible_words = [obj["name"] for obj in observation["objects"]]
+        words = metadata.get("practice_words") or visible_words
         image = {"asset_id": asset_id, "url": f"/api/lesson-images/{asset_id}", "description": observation["caption"],
                  "score": 1.0, "source": "local-generation", "model": metadata["model"], "seed": metadata["seed"], "style": metadata["style"]}
-        visual = {"activity_type": "describe_picture", "title": "Describe the picture", "scene_prompt": "",
-                  "instruction": "Describe what you can see. Use the word bank and answer the questions.",
-                  "target_words": words, "answer_key": words, "questions": observation["questions"],
+        visual = {"activity_type": "describe_picture", "title": "Describe, connect and discuss", "scene_prompt": "",
+                  "instruction": "Use the lesson words to describe the scene, connect it to the lesson and explain your ideas.",
+                  "target_words": words, "visible_objects": visible_words, "answer_key": [],
+                  "sentence_frames": observation.get("sentence_frames", []), "questions": observation["questions"],
                   "asset_id": asset_id, "verified": True}
         metadata = {**metadata, "visual_activity": visual}
         session.add(LessonImageRecord(id=asset_id, lesson_id=lesson.id, created_at=datetime.now(UTC), metadata_json=metadata))
