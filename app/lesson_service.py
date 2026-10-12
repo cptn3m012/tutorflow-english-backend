@@ -19,7 +19,6 @@ from app.schemas import (
     LessonWorksheetAsset,
 )
 from app.theme_service import resolve_theme
-from app.image_service import attach_images_to_lessons
 from app.cefr_service import (
     choose_best_grammar_target,
     choose_best_target_from_text,
@@ -668,12 +667,15 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         request.duration,
         options,
     )
-    if options.include_images:
-        lessons = await attach_images_to_lessons(lessons)
-    else:
-        for lesson in lessons:
-            lesson.images = []
-            lesson.primary_image = None
+    # Text is ready first. Pictures are generated separately for a saved lesson.
+    for lesson in lessons:
+        lesson.images = []
+        lesson.primary_image = None
+        lesson.image_requested = options.include_images
+        lesson.visual_activity = None
+        lesson.worksheet_assets = [asset for asset in lesson.worksheet_assets if asset.asset_type not in (
+            "reading_illustration", "find_in_picture", "label_the_picture",
+        )]
     lessons = prepare_lessons_for_frontend(
         lessons=lessons,
         level=cefr_profile["level"],

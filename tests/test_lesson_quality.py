@@ -183,7 +183,9 @@ class GenerationIntegrationTests(unittest.TestCase):
         self.assertEqual(lesson["reading_text"], READING)
         self.assertEqual(lesson["reading_questions"], [item["question"] for item in COMPREHENSION["items"]])
         self.assertEqual(lesson["reading_answers"], COMPREHENSION["items"])
-        self.assertEqual(len(lesson["worksheet_assets"]), 5)
+        self.assertEqual([asset["asset_type"] for asset in lesson["worksheet_assets"]], ["fill_in_the_blanks", "mini_dialogue"])
+        self.assertIsNone(lesson["visual_activity"])
+        self.assertEqual(lesson["images"], [])
 
     def test_quality_failure_does_not_restart_api_draft_generation(self):
         draft = make_lesson().model_dump()

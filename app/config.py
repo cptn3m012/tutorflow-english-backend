@@ -63,7 +63,7 @@ class ImageSettings:
     enabled: bool = False
     comfy_url: str = "http://127.0.0.1:8188"
     model: str = "flux2-klein-4b"
-    vision_model: str = "qwen3-vl:4b"
+    vision_model: str = "qwen3-vl:4b-instruct"
     storage_dir: Path = PROJECT_ROOT / "data" / "lesson-images"
     timeout_seconds: float = 300.0
 

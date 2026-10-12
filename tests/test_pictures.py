@@ -93,7 +93,7 @@ class PictureTests(unittest.TestCase):
     def test_public_access_requires_auth_for_jobs_and_assets(self):
         protected = create_app(AppSettings(public_share=True, share_username="tester", share_password="test-password-long-enough"))
         protected.dependency_overrides[get_session] = self.app.dependency_overrides[get_session]
-        with TestClient(protected) as client, patch("app.main.migrate_database"), patch("app.main.get_engine", return_value=self.engine):
+        with patch("app.main.migrate_database"), patch("app.main.get_engine", return_value=self.engine), TestClient(protected) as client:
             for url in (self.url, f"/lesson-images/{uuid4()}", "/lessons/pictures/settings"):
                 self.assertEqual(client.get(url).status_code, 401)
             self.assertEqual(client.get(self.url, auth=("tester", "test-password-long-enough")).status_code, 200)

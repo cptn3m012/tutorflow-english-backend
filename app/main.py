@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from contextlib import suppress
 import logging
 
 from fastapi import FastAPI, Request
@@ -8,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.config import AppSettings
+from app.config import AppSettings, ImageSettings
 from app.api.routes_lessons import router as lessons_router
 from app.api.routes_saved_lessons import router as saved_lessons_router
 from app.api.routes_pictures import router as pictures_router
@@ -19,9 +20,18 @@ from app.sharing import FrontendFiles, ShareProtectionMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await run_in_threadpool(migrate_database)
+    settings = ImageSettings.from_environment()
+    worker = None
+    if settings.enabled:
+        from app.picture_worker import picture_worker
+        worker = asyncio.create_task(picture_worker(app, get_engine(), settings))
     try:
         yield
     finally:
+        if worker:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
         await run_in_threadpool(get_engine().dispose)
 
 def create_app(settings: AppSettings | None = None) -> FastAPI:

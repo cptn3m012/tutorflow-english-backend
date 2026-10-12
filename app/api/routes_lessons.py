@@ -102,7 +102,7 @@ async def get_pdf_options_endpoint():
 async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request: Request):
     slots = http_request.app.state.generation_slots
     if slots.locked():
-        raise HTTPException(status_code=429, detail="A lesson is already being generated. Please wait and try again.", headers={"Retry-After": "30"})
+        raise HTTPException(status_code=429, detail="The local model is preparing a lesson or picture. Please wait and try again.", headers={"Retry-After": "30"})
     try:
         async with slots:
             return await generate_lesson_variants(request)
