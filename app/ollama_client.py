@@ -16,7 +16,7 @@ TASK_OPTIONS = {
     "comprehension": (0.0, 4096),
     "review": (0.0, 3072),
     "cloze": (0.0, 2048),
-    "image_metadata": (0.0, 1024),
+    "image_metadata": (0.0, 2048),
 }
 SYSTEM_PROMPT = (
     "You prepare accurate, classroom-ready English lesson materials for TutorFlow. "

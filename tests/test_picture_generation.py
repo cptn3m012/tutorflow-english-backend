@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -16,7 +17,7 @@ from app.comfy_client import PictureError, build_workflow
 from app.config import ImageSettings
 from app.database import build_engine, migrate_database
 from app.models import LessonImageRecord, PictureJobRecord, SavedLessonRecord
-from app.picture_generation import PictureObservation, ScenePlan, prepare_picture
+from app.picture_generation import PictureObservation, ScenePlan, inspect_picture, prepare_picture
 from app.picture_worker import process_job, recover_jobs
 from tests.helpers import make_lesson
 
@@ -37,6 +38,23 @@ def picture_bytes():
 
 
 class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_questions_are_constrained_to_blindly_observed_objects(self):
+        observed = observation().model_dump(exclude={"questions"})
+        with patch("app.picture_generation.vision_json", new_callable=AsyncMock, side_effect=[
+            json.dumps(observed), json.dumps({"questions": observation().model_dump()["questions"]}),
+        ]) as vision:
+            result = await inspect_picture(picture_bytes(), "A2", ImageSettings())
+        initial, questions = vision.await_args_list
+        self.assertNotIn("questions", initial.args[2]["properties"])
+        enum = questions.args[2]["properties"]["questions"]["items"]["properties"]["object_names"]["items"]["enum"]
+        self.assertEqual(enum, ["cup", "plate", "menu"])
+        self.assertEqual(result.questions[0].object_names, ["cup"])
+
+    def test_duplicate_sightings_do_not_duplicate_the_word_bank(self):
+        data = observation().model_dump()
+        data["objects"].append(data["objects"][0])
+        self.assertEqual(len(PictureObservation.model_validate(data).objects), 3)
+
     async def test_inspection_is_blind_and_missing_objects_have_one_retry(self):
         plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"])
         wrong = observation().model_copy(update={"objects": observation().objects[:2]})
