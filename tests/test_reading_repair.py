@@ -17,16 +17,16 @@ class ReadingRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.reading_text, READING)
         generate.assert_not_awaited()
 
-    async def test_third_rewrite_is_checked_and_dependent_assets_are_invalidated(self):
+    async def test_fifth_rewrite_is_checked_and_dependent_assets_are_invalidated(self):
         lesson = make_lesson(reading_text="Anna drinks tea.", worksheet_assets=[
             LessonWorksheetAsset(asset_type="fill_in_the_blanks", title="Old", instruction="Old")
         ])
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
-                   side_effect=["Too short.", "Still short.", READING]) as generate:
+                   side_effect=["Too short."] * 4 + [READING]) as generate:
             result = await rewrite_reading_text_if_needed(lesson, "A2", "cafe", 30)
         self.assertEqual(result.reading_text, READING)
         self.assertEqual(result.worksheet_assets, [])
-        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(generate.await_count, 5)
 
     async def test_failed_rewrites_do_not_pad_or_truncate_reading(self):
         for rewritten in ("Anna drinks tea.", READING * 4):
@@ -34,10 +34,10 @@ class ReadingRepairTests(unittest.IsolatedAsyncioTestCase):
                 lesson = make_lesson(reading_text="Original short text.")
                 with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
                            return_value=rewritten) as generate:
-                    with self.assertRaisesRegex(LessonQualityError, "after 3 attempts"):
+                    with self.assertRaisesRegex(LessonQualityError, "after 5 attempts"):
                         await rewrite_reading_text_if_needed(lesson, "A2", "cafe", 30)
                 self.assertEqual(lesson.reading_text, "Original short text.")
-                self.assertEqual(generate.await_count, 3)
+                self.assertEqual(generate.await_count, 5)
 
     async def test_exhausted_section_repair_does_not_restart_whole_generation(self):
         request = LessonGenerateRequest(level="A2", duration=30, topic="cafe")
@@ -47,6 +47,22 @@ class ReadingRepairTests(unittest.IsolatedAsyncioTestCase):
                 await generate_lesson_variants(request)
         self.assertEqual(generate.await_count, 1)
 
+    async def test_fifth_draft_attempt_can_succeed(self):
+        request = LessonGenerateRequest(level="A2", duration=30, topic="cafe")
+        expected = object()
+        with patch("app.lesson_service.try_generate_once", new_callable=AsyncMock,
+                   side_effect=[ValueError("Invalid JSON")] * 4 + [expected]) as generate:
+            self.assertIs(await generate_lesson_variants(request), expected)
+        self.assertEqual(generate.await_count, 5)
+
+    async def test_invalid_drafts_stop_after_five_attempts(self):
+        request = LessonGenerateRequest(level="A2", duration=30, topic="cafe")
+        with patch("app.lesson_service.try_generate_once", new_callable=AsyncMock,
+                   side_effect=ValueError("Invalid JSON")) as generate:
+            with self.assertRaisesRegex(ValueError, "Generation failed after 5 attempts"):
+                await generate_lesson_variants(request)
+        self.assertEqual(generate.await_count, 5)
+
     async def test_empty_responses_cannot_approve_a_forced_content_repair(self):
         lesson = make_lesson()
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
@@ -55,7 +71,7 @@ class ReadingRepairTests(unittest.IsolatedAsyncioTestCase):
                 await rewrite_reading_text_if_needed(
                     lesson, "A2", "cafe", 30, force=True, quality_feedback="Fix the passage content.",
                 )
-        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(generate.await_count, 5)
         self.assertEqual(lesson.reading_text, READING)
 
     def test_one_sided_overrides_cannot_create_an_impossible_range(self):

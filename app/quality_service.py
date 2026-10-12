@@ -1,4 +1,5 @@
 from app.errors import LessonQualityError
+from app.generation_policy import LESSON_MAX_ATTEMPTS
 from app.ollama_client import generate_from_ollama
 from app.prompts import build_lesson_quality_prompt
 from app.schemas import LessonQualityIssue, LessonQualityReview, LessonVariant
@@ -18,7 +19,7 @@ async def review_lesson_quality(lesson: LessonVariant, level: str) -> list[Lesso
         "cloze_exercises": [asset.model_dump() for asset in cloze_assets],
     }
     feedback = ""
-    for _ in range(3):
+    for _ in range(LESSON_MAX_ATTEMPTS):
         raw_response = await generate_from_ollama(
             build_lesson_quality_prompt(context, feedback),
             json_schema=LessonQualityReview.model_json_schema(),
@@ -33,5 +34,5 @@ async def review_lesson_quality(lesson: LessonVariant, level: str) -> list[Lesso
             feedback = str(error)
 
     raise LessonQualityError(
-        f"Could not obtain a valid quality review for '{lesson.title}' after 3 attempts: {feedback}"
+        f"Could not obtain a valid quality review for '{lesson.title}' after {LESSON_MAX_ATTEMPTS} attempts: {feedback}"
     )

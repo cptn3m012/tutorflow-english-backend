@@ -3,6 +3,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.errors import LessonQualityError
+from app.generation_policy import LESSON_MAX_ATTEMPTS
 from app.ollama_client import generate_from_ollama
 from app.prompts import build_reading_comprehension_prompt
 from app.schemas import LessonVariant, NonEmptyText, ReadingQuestionAnswer
@@ -71,7 +72,7 @@ async def generate_reading_comprehension(
         schema["$defs"]["ReadingEvidenceSelection"]["properties"][field]["maximum"] = len(spans)
     last_error = feedback
 
-    for _ in range(3):
+    for _ in range(LESSON_MAX_ATTEMPTS):
         prompt = build_reading_comprehension_prompt(
             level, lesson.title, lesson.lesson_goal, lesson.reading_text, question_count, last_error,
             sentences=sentences,
@@ -106,5 +107,5 @@ async def generate_reading_comprehension(
         return lesson
 
     raise LessonQualityError(
-        f"Reading comprehension repair failed for '{lesson.title}' after 3 attempts: {last_error}"
+        f"Reading comprehension repair failed for '{lesson.title}' after {LESSON_MAX_ATTEMPTS} attempts: {last_error}"
     )

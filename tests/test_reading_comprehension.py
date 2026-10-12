@@ -40,6 +40,18 @@ class ComprehensionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generate.await_count, 2)
         self.assertIn("Evidence sentence range", generate.call_args.args[0])
 
+    async def test_fifth_comprehension_attempt_uses_validation_feedback(self):
+        invalid = copy.deepcopy(COMPREHENSION_SELECTION)
+        invalid["items"][0]["evidence_end"] = 99
+        lesson = make_lesson()
+        with patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=[json.dumps(invalid)] * 4 + [json.dumps(COMPREHENSION_SELECTION)]) as generate:
+            await generate_reading_comprehension(lesson, "A2", 3)
+        self.assertEqual(generate.await_count, 5)
+        self.assertEqual(lesson.reading_text, READING)
+        self.assertIn("Evidence sentence range", generate.await_args.args[0])
+        validate_reading_comprehension(lesson, 3)
+
     async def test_all_saints_activities_copy_multiple_sentences_exactly(self):
         reading = (
             "All Saints’ Day is on November 1.\n\n"
@@ -73,7 +85,7 @@ class ComprehensionTests(unittest.IsolatedAsyncioTestCase):
                            return_value=json.dumps(invalid)) as generate:
                     with self.assertRaises(LessonQualityError):
                         await generate_reading_comprehension(lesson, "A2", 3)
-                self.assertEqual(generate.await_count, 3)
+                self.assertEqual(generate.await_count, 5)
                 self.assertEqual(lesson.model_dump(), original)
         lesson = make_lesson()
         with patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
@@ -98,7 +110,7 @@ class ComprehensionTests(unittest.IsolatedAsyncioTestCase):
                            return_value=response) as generate:
                     with self.assertRaises(LessonQualityError):
                         await generate_reading_comprehension(lesson, "A2", 3)
-                self.assertEqual(generate.await_count, 3)
+                self.assertEqual(generate.await_count, 5)
                 self.assertEqual(lesson.model_dump(), original)
 
     def test_answer_key_order_and_evidence_word_boundaries(self):

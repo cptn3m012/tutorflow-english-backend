@@ -111,15 +111,44 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
              patch("app.lesson_service.generate_reading_comprehension", new_callable=AsyncMock) as repair:
             with self.assertRaisesRegex(LessonQualityError, "consistency checks failed"):
                 await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
-        self.assertEqual(review.await_count, 3)
-        self.assertEqual(repair.await_count, 2)
+        self.assertEqual(review.await_count, 5)
+        self.assertEqual(repair.await_count, 4)
 
     async def test_missing_review_verdict_never_counts_as_approval(self):
         with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value="{}") as generate:
             with self.assertRaisesRegex(LessonQualityError, "valid quality review"):
                 await review_lesson_quality(answered_lesson(), "A2")
-        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(generate.await_count, 5)
+
+    async def test_fifth_review_and_consistency_round_can_succeed(self):
+        lesson = answered_lesson()
+        with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=['{}'] * 4 + ['{"issues": []}']) as generate:
+            self.assertEqual(await review_lesson_quality(lesson, "A2"), [])
+        self.assertEqual(generate.await_count, 5)
+        issue = LessonQualityIssue(section="comprehension", message="Repair the answer.")
+        with patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock,
+                   side_effect=[[issue]] * 4 + [[]]) as review, \
+             patch("app.lesson_service.generate_reading_comprehension", new_callable=AsyncMock) as repair:
+            result = await repair_lesson_consistency(lesson, "A2", "cafe", 30,
+                         LessonAdvancedOptions(include_worksheet_assets=False, include_visual_activity=False))
+        self.assertIs(result, lesson)
+        self.assertEqual(review.await_count, 5)
+        self.assertEqual(repair.await_count, 4)
+
+    async def test_cloze_fifth_attempt_succeeds_and_invalid_exercise_is_bounded(self):
+        valid = {"lines": ["After breakfast, she asks for the ____ and pays with her card."],
+                 "word_bank": ["bill"], "answer_key": ["bill"]}
+        with patch("app.worksheet_service.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=['{}'] * 4 + [json.dumps(valid)]) as generate:
+            result = await repair_cloze_asset(answered_lesson(), "Fix the exercise.")
+        self.assertEqual(generate.await_count, 5)
+        self.assertEqual(result.answer_key, ["bill"])
+        with patch("app.worksheet_service.generate_from_ollama", new_callable=AsyncMock, return_value='{}') as generate:
+            with self.assertRaisesRegex(LessonQualityError, "after 5 attempts"):
+                await repair_cloze_asset(answered_lesson(), "Fix the exercise.")
+        self.assertEqual(generate.await_count, 5)
 
     async def test_disabled_worksheets_are_excluded_from_review_and_repair(self):
         lesson = answered_lesson()
