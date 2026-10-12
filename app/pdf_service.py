@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from typing import Any
 from textwrap import wrap
+from uuid import UUID
+
+from sqlalchemy.orm import Session
 
 from app.reading_service import validate_reading_comprehension
 from app.schemas import (
@@ -14,7 +17,11 @@ from app.schemas import (
     LessonVariant,
     LessonWorksheetAsset,
     PdfExportOptions,
+    LessonVisualActivity,
 )
+from app.database import get_engine
+from app.models import LessonImageRecord, SavedLessonRecord
+from app.picture_storage import image_data_url
 
 
 A4_WIDTH = 595
@@ -496,7 +503,7 @@ def add_reading_answer_key(doc: PdfDocument, lesson: LessonVariant):
         doc.text(f"Evidence: {item.evidence}", size=9, indent=16, gap=8, color=MUTED_COLOR)
 
 
-def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int):
+def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int, picture_assets: dict):
     doc.text(lesson.title, size=24, bold=True, gap=7)
     doc.text("English lesson", size=11, bold=True, gap=10, color=doc.accent_color)
 
@@ -542,10 +549,19 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int):
 
     if lesson.visual_activity and doc.options.include_visual_activity:
         add_section(doc, 8, "Visual task")
+        asset_id = lesson.visual_activity.asset_id
+        if asset_id and asset_id in picture_assets and doc.options.include_images:
+            doc.draw_jpeg_data_url(picture_assets[asset_id], max_height=320)
         doc.text(lesson.visual_activity.title, size=11, bold=True, indent=8)
         doc.text(lesson.visual_activity.instruction, size=10, indent=8)
         doc.text("Target words: " + ", ".join(lesson.visual_activity.target_words), size=10, indent=8, color=MUTED_COLOR)
-        if lesson.visual_activity.answer_key and doc.options.include_answers:
+        for number, item in enumerate(lesson.visual_activity.questions, start=1):
+            doc.text(f"{number}. {item['question']}", size=10, indent=8)
+            if doc.options.include_answers:
+                doc.text(f"Answer: {item['answer']}", size=10, indent=16, color=MUTED_COLOR)
+                doc.text(f"Evidence: {item['evidence']}", size=9, indent=16, color=MUTED_COLOR)
+            doc.answer_space(2)
+        if not lesson.visual_activity.questions and lesson.visual_activity.answer_key and doc.options.include_answers:
             doc.text(
                 "Answer key: " + ", ".join(lesson.visual_activity.answer_key),
                 size=10,
@@ -562,13 +578,41 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int):
 
     lesson_image = lesson.primary_image or (lesson.images[0] if lesson.images else None)
     if doc.options.include_images and lesson_image:
+        if lesson_image.asset_id:
+            if not (lesson.visual_activity and doc.options.include_visual_activity):
+                add_section(doc, worksheet_number, "Picture")
+                doc.draw_jpeg_data_url(picture_assets[lesson_image.asset_id], max_height=320)
+            return
         add_section(doc, worksheet_number + 1 if doc.options.include_worksheet_assets else worksheet_number, "Image")
         doc.text(lesson_image.description, size=10, indent=8)
         doc.text(lesson_image.url, size=9, indent=8, color=MUTED_COLOR)
 
 
+def load_picture_assets(response: LessonGenerateResponse, options: PdfExportOptions) -> dict:
+    assets = {}
+    if not (options.include_images or options.include_visual_activity):
+        return assets
+    for lesson in response.lessons:
+        image = lesson.primary_image or (lesson.images[0] if lesson.images else None)
+        if image is None or not image.asset_id:
+            continue
+        asset_id = str(UUID(image.asset_id))
+        if lesson.visual_activity and lesson.visual_activity.asset_id and lesson.visual_activity.asset_id != asset_id:
+            raise ValueError("Picture and questions refer to different image versions.")
+        with Session(get_engine()) as session:
+            record = session.get(LessonImageRecord, asset_id)
+            if record is None or session.get(SavedLessonRecord, record.lesson_id) is None:
+                raise ValueError("A lesson picture is unavailable. Open the saved lesson and try again.")
+            lesson.visual_activity = LessonVisualActivity.model_validate(record.metadata_json["visual_activity"])
+        if options.include_images:
+            assets[asset_id] = image_data_url(asset_id)
+    return assets
+
+
 def build_lesson_pdf(response: LessonGenerateResponse, options: PdfExportOptions | None = None) -> bytes:
     options = options or PdfExportOptions()
+    response = response.model_copy(deep=True)
+    picture_assets = load_picture_assets(response, options)
     doc = PdfDocument(options)
 
     if len(response.lessons) > 1:
@@ -595,7 +639,7 @@ def build_lesson_pdf(response: LessonGenerateResponse, options: PdfExportOptions
     for index, lesson in enumerate(response.lessons, start=1):
         if index > 1 or len(response.lessons) > 1:
             doc.add_page()
-        add_lesson(doc, lesson, index)
+        add_lesson(doc, lesson, index, picture_assets)
 
     doc.add_custom_images()
 
