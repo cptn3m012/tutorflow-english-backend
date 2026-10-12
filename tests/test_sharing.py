@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import AppSettings
 from app.main import create_app
+from app.ollama_client import OllamaError
 
 PASSWORD = "test-password-for-sharing-only"
 
@@ -76,6 +77,18 @@ class SharingTests(unittest.TestCase):
         response = self.client.post("/api/lessons/generate", auth=("tutorflow", PASSWORD), json=payload)
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.headers["retry-after"], "30")
+
+    def test_model_failure_returns_service_unavailable_and_releases_capacity(self):
+        message = "Ollama could not initialize the GPU. Restart Ollama and try again."
+        payload = {"level": "A2", "duration": 30, "topic": "Cafe", "variant_count": 1}
+        with patch("app.api.routes_lessons.generate_lesson_variants", new_callable=AsyncMock,
+                   side_effect=OllamaError(message)):
+            for _ in range(2):
+                response = self.client.post("/api/lessons/generate", json=payload,
+                                            auth=("tutorflow", PASSWORD))
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.json(), {"detail": message})
+                self.assertFalse(self.application.state.generation_slots.locked())
 
     def test_frontend_routes_and_missing_api_or_assets(self):
         with TemporaryDirectory() as directory:

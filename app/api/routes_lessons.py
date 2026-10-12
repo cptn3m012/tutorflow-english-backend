@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import ValidationError
 from app.schemas import CefrProfile, LessonGenerateRequest, LessonGenerateResponse
 from app.lesson_service import generate_lesson_variants
+from app.ollama_client import OllamaError
 from app.cefr_service import get_cefr_profile, list_cefr_profiles
 from app.pdf_service import build_lesson_pdf, parse_lesson_pdf_payload
 
@@ -105,6 +106,8 @@ async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request
     try:
         async with slots:
             return await generate_lesson_variants(request)
+    except OllamaError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:

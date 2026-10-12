@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from typing import Literal
 
 import httpx
@@ -26,7 +28,18 @@ SYSTEM_PROMPT = (
 
 
 class OllamaError(RuntimeError):
-    """Infrastructure or incomplete output; restarting the whole lesson cannot repair it."""
+    """Model/runtime failure after any bounded recovery attempt."""
+
+
+def is_gpu_initialization_failure(response: httpx.Response) -> bool:
+    if response.status_code != 500:
+        return False
+    try:
+        data = response.json()
+    except ValueError:
+        return False
+    error = data.get("error") if isinstance(data, dict) else None
+    return isinstance(error, str) and "cuda error: shared object initialization failed" in error.lower()
 
 
 async def generate_from_ollama(
@@ -56,12 +69,25 @@ async def generate_from_ollama(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.timeout_seconds, connect=10.0)) as client:
-            response = await client.post(f"{settings.base_url}/api/generate", json=payload)
-            response.raise_for_status()
+            for attempt in range(2):
+                response = await client.post(f"{settings.base_url}/api/generate", json=payload)
+                if attempt == 0 and is_gpu_initialization_failure(response):
+                    logging.getLogger(__name__).warning(
+                        "Ollama GPU initialization failed for %s; retrying once.", settings.model,
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                response.raise_for_status()
+                break
     except httpx.TimeoutException as error:
         raise OllamaError(f"Ollama timed out while preparing {task} with {settings.model}. Please try again.") from error
     except httpx.HTTPStatusError as error:
-        if error.response.status_code == 404:
+        if is_gpu_initialization_failure(error.response):
+            message = (
+                f"Ollama could not initialize the GPU for '{settings.model}' after retrying. "
+                "Restart Ollama and try again. If this persists, check available system memory and the GPU driver."
+            )
+        elif error.response.status_code == 404:
             message = f"Ollama model '{settings.model}' is unavailable. Install this model in Ollama first."
         else:
             message = f"Ollama rejected the {task} request (HTTP {error.response.status_code}). Check the model and Ollama settings."

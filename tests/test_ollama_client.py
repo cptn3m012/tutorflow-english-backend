@@ -1,7 +1,7 @@
 import json
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -28,17 +28,19 @@ class OllamaSettingsTests(unittest.TestCase):
 
 
 class OllamaClientTests(unittest.IsolatedAsyncioTestCase):
-    async def request(self, answer, *, task="lesson", schema=None, model="gpt-oss:20b"):
-        calls = []
+    async def request(self, answer, *, task="lesson", schema=None, model="gpt-oss:20b", calls=None):
+        calls = calls if calls is not None else []
+        sequence = iter(answer) if isinstance(answer, tuple) else None
         real_client = httpx.AsyncClient
 
         def handle(request):
             calls.append(json.loads(request.content))
-            if isinstance(answer, Exception):
-                raise answer
-            if isinstance(answer, httpx.Response):
-                return answer
-            return httpx.Response(200, json=answer)
+            value = next(sequence) if sequence is not None else answer
+            if isinstance(value, Exception):
+                raise value
+            if isinstance(value, httpx.Response):
+                return value
+            return httpx.Response(200, json=value)
 
         def client(**kwargs):
             return real_client(transport=httpx.MockTransport(handle), **kwargs)
@@ -97,3 +99,42 @@ class OllamaClientTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(expected=expected), self.assertRaisesRegex(OllamaError, expected):
                 await self.request(answer)
+
+    async def test_gpu_initialization_failure_retries_identical_request_once(self):
+        failure = httpx.Response(500, json={
+            "error": "llama-server process has terminated: CUDA error: shared object initialization failed",
+        })
+        calls = []
+        with patch("app.ollama_client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            answer, _ = await self.request((failure, {"response": "Recovered lesson."}), calls=calls)
+        self.assertEqual(answer, "Recovered lesson.")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], calls[1])
+        sleep.assert_awaited_once_with(1)
+
+    async def test_persistent_gpu_failure_stops_after_one_retry_with_safe_message(self):
+        failure = httpx.Response(500, json={
+            "error": "Private runtime path: CUDA error: shared object initialization failed",
+        })
+        calls = []
+        with patch("app.ollama_client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            with self.assertRaises(OllamaError) as raised:
+                await self.request((failure, failure), calls=calls)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("Restart Ollama", str(raised.exception))
+        self.assertNotIn("Private runtime path", str(raised.exception))
+        sleep.assert_awaited_once_with(1)
+
+    async def test_other_server_errors_are_not_retried(self):
+        for failure in (
+            httpx.Response(500, json={"error": "out of memory"}),
+            httpx.Response(500, text="invalid-json"),
+            httpx.Response(400, json={"error": "CUDA error: shared object initialization failed"}),
+        ):
+            with self.subTest(status=failure.status_code):
+                calls = []
+                with patch("app.ollama_client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+                    with self.assertRaisesRegex(OllamaError, f"HTTP {failure.status_code}"):
+                        await self.request(failure, calls=calls)
+                self.assertEqual(len(calls), 1)
+                sleep.assert_not_awaited()
