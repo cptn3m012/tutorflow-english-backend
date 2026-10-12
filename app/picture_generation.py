@@ -7,9 +7,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.comfy_client import PictureError, free_comfy, render_picture
+from app.comfy_runtime import comfy_runtime
 from app.config import ImageSettings, OllamaSettings
-from app.ollama_client import generate_from_ollama, is_gpu_initialization_failure
+from app.ollama_client import is_gpu_initialization_failure
 from app.picture_storage import normalize_image
+
 
 
 class ScenePlan(BaseModel):
@@ -70,7 +72,7 @@ async def unload_ollama(model: str):
         raise PictureError("Could not release the local language model. Check Ollama before generating a picture.") from error
 
 
-async def plan_scene(lesson: dict, level: str, theme: str) -> ScenePlan:
+async def plan_scene(lesson: dict, level: str, theme: str, settings: ImageSettings) -> ScenePlan:
     context = {"title": lesson.get("title", ""), "theme": theme, "level": level,
                "reading": str(lesson.get("reading_text", ""))[:6000],
                "vocabulary": lesson.get("target_vocabulary", [])[:16]}
@@ -84,7 +86,7 @@ async def plan_scene(lesson: dict, level: str, theme: str) -> ScenePlan:
         "Do not write questions or answers: the actual image will be inspected separately.\n"
         + json.dumps(context, ensure_ascii=False)
     )
-    raw = await generate_from_ollama(prompt, json_schema=ScenePlan.model_json_schema(), task="image_metadata")
+    raw = await vision_json(None, prompt, ScenePlan.model_json_schema(), settings, keep_alive=0)
     return ScenePlan.model_validate_json(raw)
 
 
@@ -132,12 +134,14 @@ async def inspect_picture(content: bytes, level: str, settings: ImageSettings) -
     return PictureObservation.model_validate({**observed.model_dump(), **questions})
 
 
-async def vision_json(content: bytes, prompt: str, schema: dict, settings: ImageSettings, *, keep_alive: str | int) -> str:
+async def vision_json(content: bytes | None, prompt: str, schema: dict, settings: ImageSettings, *, keep_alive: str | int) -> str:
     ollama = OllamaSettings.from_environment()
     prompt += "\nRequired JSON Schema:\n" + json.dumps(schema)
-    payload = {"model": settings.vision_model, "prompt": prompt, "images": [base64.b64encode(content).decode("ascii")],
+    payload = {"model": settings.vision_model, "prompt": prompt,
                "stream": False, "keep_alive": keep_alive, "format": schema,
                "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 2048}}
+    if content is not None:
+        payload["images"] = [base64.b64encode(content).decode("ascii")]
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.timeout_seconds, connect=10)) as client:
             for attempt in range(2):
@@ -186,17 +190,20 @@ def missing_objects(plan: ScenePlan, observation: PictureObservation) -> list[st
 async def prepare_picture(lesson: dict, level: str, theme: str, style: str, seed: int, settings: ImageSettings, progress):
     await progress("planning")
     # ComfyUI and Ollama take turns on the same GPU under the application semaphore.
-    await free_comfy(settings)
-    await unload_ollama(settings.vision_model)
-    plan = await plan_scene(lesson, level, theme)
+    if not settings.managed_runtime:
+        await free_comfy(settings)
     await unload_ollama(OllamaSettings.from_environment().model)
+    plan = await plan_scene(lesson, level, theme, settings)
+    await unload_ollama(settings.vision_model)
     prompt = scene_prompt(plan, style)
     for attempt in range(2):
         await progress("rendering")
-        try:
-            content = normalize_image(await render_picture(prompt, seed + attempt, settings))
-        finally:
-            await free_comfy(settings)
+        async with comfy_runtime(settings):
+            try:
+                content = normalize_image(await render_picture(prompt, seed + attempt, settings))
+            finally:
+                if not settings.managed_runtime:
+                    await free_comfy(settings)
         await progress("checking")
         # The planned objects and prompt are intentionally absent from this inspection.
         observation = await inspect_picture(content, level, settings)

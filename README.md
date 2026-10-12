@@ -114,6 +114,7 @@ Optional environment variables:
 | `OLLAMA_REVIEW_REASONING_EFFORT` | GPT-OSS reasoning effort for semantic quality review | `medium` |
 | `LOCAL_IMAGES_ENABLED` | Enable the local picture worker | `false` |
 | `COMFYUI_BASE_URL` | Local ComfyUI origin; loopback addresses only | `http://127.0.0.1:8188` |
+| `COMFYUI_MANAGED_RUNTIME` | Start the dedicated runtime only during rendering and stop it before Ollama uses the GPU | `false` |
 | `IMAGE_MODEL` | Fixed preset: `flux2-klein-4b` or `z-image-turbo` | `flux2-klein-4b` |
 | `IMAGE_VISION_MODEL` | Local Ollama vision model | `qwen3-vl:4b-instruct` |
 | `IMAGE_TIMEOUT_SECONDS` | Per-stage picture timeout, 30–600 seconds | `300` |
@@ -139,7 +140,11 @@ uses these weights in ComfyUI's model directories:
 
 Pull the vision model with `ollama pull qwen3-vl:4b-instruct`, set
 `LOCAL_IMAGES_ENABLED=true` in the private `.env`, and start ComfyUI on loopback.
-On Windows, `scripts/start-images.ps1` starts the installed service in the background.
+For the dedicated installation, enable `COMFYUI_MANAGED_RUNTIME=true` to release
+the runtime's GPU and host-memory allocations between stages. The backend launches
+only its own runtime and never terminates a pre-existing service. Do not also start
+standalone ComfyUI in this mode. Alternatively, `scripts/start-images.ps1` starts
+an installed standalone service in the background on Windows.
 Keep one backend worker: text and picture generation share one GPU semaphore.
 
 After saving a lesson, create a job with
@@ -149,7 +154,8 @@ After saving a lesson, create a job with
 Generated files are available through authenticated `/lesson-images/{asset_id}`
 endpoints; browser requests cannot supply a workflow, model filename or local path.
 
-The vision model observes pixels before seeing any planned object list. Questions
+The small Qwen model plans scenes, avoiding an extra reload of the lesson LLM.
+It observes pixels before seeing any planned object list. Questions
 then use a schema restricted to the observed objects. A picture missing required
 objects is regenerated once; failure keeps the text and previous picture intact.
 Pictures and corresponding activities are published in one database transaction.

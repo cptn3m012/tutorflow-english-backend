@@ -66,6 +66,7 @@ class ImageSettings:
     vision_model: str = "qwen3-vl:4b-instruct"
     storage_dir: Path = PROJECT_ROOT / "data" / "lesson-images"
     timeout_seconds: float = 300.0
+    managed_runtime: bool = False
 
     @classmethod
     def from_environment(cls):
@@ -76,6 +77,7 @@ class ImageSettings:
             vision_model=os.getenv("IMAGE_VISION_MODEL", cls.vision_model),
             storage_dir=Path(os.getenv("IMAGE_STORAGE_DIR", str(cls.storage_dir))).resolve(),
             timeout_seconds=float(os.getenv("IMAGE_TIMEOUT_SECONDS", str(cls.timeout_seconds))),
+            managed_runtime=os.getenv("COMFYUI_MANAGED_RUNTIME", "false").lower() == "true",
         )
         settings.validate()
         return settings

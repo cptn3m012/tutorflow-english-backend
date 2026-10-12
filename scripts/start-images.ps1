@@ -5,11 +5,15 @@ $backendDirectory = Split-Path -Parent $PSScriptRoot
 $backendPython = Join-Path $backendDirectory '.venv\Scripts\python.exe'
 Push-Location -LiteralPath $backendDirectory
 try {
-    $configuration = & $backendPython -c "import json; from app.config import ImageSettings; s=ImageSettings.from_environment(); print(json.dumps({'enabled':s.enabled,'url':s.comfy_url,'model':s.model}))"
+    $configuration = & $backendPython -c "import json; from app.config import ImageSettings; s=ImageSettings.from_environment(); print(json.dumps({'enabled':s.enabled,'url':s.comfy_url,'model':s.model,'managed':s.managed_runtime}))"
     if ($LASTEXITCODE -ne 0) { throw 'Could not read local picture settings.' }
 } finally { Pop-Location }
 $configuration = $configuration | ConvertFrom-Json
 if ($IfEnabled -and -not $configuration.enabled) { return }
+if ($IfEnabled -and $configuration.managed) {
+    Write-Host 'The backend will start the picture runtime only while rendering.'
+    return
+}
 $serviceUri = [Uri]$configuration.url
 
 function Test-PictureService {

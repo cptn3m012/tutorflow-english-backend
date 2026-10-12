@@ -103,7 +103,8 @@ async def process_job(app, engine, job: dict, settings: ImageSettings):
                 pass  # Deleted lesson; never recreate it from a stale snapshot.
         finally:
             try:
-                await free_comfy(settings)
+                if not settings.managed_runtime:
+                    await free_comfy(settings)
                 await unload_ollama(settings.vision_model)
             except PictureError:
                 logger.warning("Local picture model cleanup failed")
