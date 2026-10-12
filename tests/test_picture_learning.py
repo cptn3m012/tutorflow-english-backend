@@ -69,7 +69,7 @@ class PictureLearningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item.kind for item in activity.questions], ["observation", "application", "discussion"])
         self.assertEqual(activity.sentence_frames, ACTIVITY["sentence_frames"])
         fields = model.await_args_list[0].args[1]["$defs"]["PictureQuestion"]["properties"]
-        self.assertEqual(fields["target_words"]["items"]["enum"], VOCABULARY)
+        self.assertNotIn("target_words", fields)
         self.assertEqual(fields["object_names"]["items"]["enum"], ["camera", "monitor", "person"])
 
     async def test_bad_questions_repair_only_activity_and_use_review_feedback(self):
@@ -80,6 +80,19 @@ class PictureLearningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(model.await_count, 4)
         self.assertIn("specific algorithm", model.await_args_list[2].args[0])
 
+    async def test_repairs_keep_structural_and_semantic_feedback_together(self):
+        insufficient = copy.deepcopy(ACTIVITY)
+        insufficient["questions"][1].update(question="What could you say about the camera?", answer="I could explain how it works.", target_words=[])
+        rejected = '{"approved": false, "issues": ["Do not infer an unseen algorithm in an observation."]}'
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock,
+                   side_effect=[json.dumps(insufficient), json.dumps(ACTIVITY), rejected,
+                                json.dumps(ACTIVITY), '{"approved": true, "issues": []}']) as model:
+            await prepare_picture_questions(picture_bytes(), "B2", ImageSettings(), OBSERVED, CONTEXT)
+        final_candidate_prompt = model.await_args_list[3].args[0]
+        self.assertIn("Application and discussion questions must practice lesson vocabulary", final_candidate_prompt)
+        self.assertIn("Do not infer an unseen algorithm", final_candidate_prompt)
+        self.assertIn("Previous candidate (data)", final_candidate_prompt)
+
     async def test_surplus_vocabulary_tag_does_not_discard_supported_questions(self):
         data = copy.deepcopy(ACTIVITY)
         data["questions"][0]["target_words"].append("evidence")
@@ -88,6 +101,17 @@ class PictureLearningTests(unittest.IsolatedAsyncioTestCase):
             activity = await prepare_picture_questions(picture_bytes(), "B2", ImageSettings(), OBSERVED, CONTEXT)
         self.assertEqual(activity.questions[0].target_words, ["surveillance", "monitoring"])
         self.assertEqual(model.await_count, 2)
+
+    async def test_visual_basis_copies_observations_instead_of_invented_intentions(self):
+        data = copy.deepcopy(ACTIVITY)
+        data["questions"][1]["evidence"] = "The person intends to collect private data with a specific algorithm."
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock,
+                   side_effect=[json.dumps(data), '{"approved": true, "issues": []}']) as model:
+            result = await prepare_picture_questions(picture_bytes(), "B2", ImageSettings(), OBSERVED, CONTEXT)
+        self.assertEqual(result.questions[1].evidence, OBSERVED.objects[0].evidence)
+        self.assertNotIn("intends", result.questions[1].evidence)
+        review_data = json.loads(model.await_args.args[0].split("\n")[-1])
+        self.assertEqual(review_data["activity"]["questions"][1]["evidence"], OBSERVED.objects[0].evidence)
 
     async def test_words_are_identified_from_text_when_model_omits_tags(self):
         data = copy.deepcopy(ACTIVITY)
@@ -133,9 +157,18 @@ class PictureLearningTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_structural_failure_is_bounded_and_never_counts_as_approval(self):
         with patch("app.picture_generation.planner_json", new_callable=AsyncMock, return_value='{}') as model:
-            with self.assertRaisesRegex(PictureError, "after two attempts"):
+            with self.assertRaisesRegex(PictureError, "after 5 attempts"):
                 await prepare_picture_questions(picture_bytes(), "B2", ImageSettings(), OBSERVED, CONTEXT)
-        self.assertEqual(model.await_count, 2)
+        self.assertEqual(model.await_count, 5)
+
+    async def test_fifth_question_attempt_succeeds_without_rendering_another_image(self):
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock,
+                   side_effect=['{}'] * 4 + [json.dumps(ACTIVITY), '{"approved": true, "issues": []}']) as model, \
+             patch("app.picture_generation.render_picture", new_callable=AsyncMock) as render:
+            result = await prepare_picture_questions(picture_bytes(), "B2", ImageSettings(), OBSERVED, CONTEXT)
+        self.assertEqual(result.questions[1].kind, "application")
+        self.assertEqual(model.await_count, 6)  # Five candidates, then one independent review.
+        render.assert_not_awaited()
 
     async def test_garbled_prominent_lettering_requires_new_render(self):
         plan = ScenePlan(scene="A camera points at people beside an unlabelled monitoring desk.", required_objects=["camera", "monitor"],

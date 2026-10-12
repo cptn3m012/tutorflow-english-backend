@@ -103,7 +103,10 @@ def validate_learning_activity(activity: PictureLearningActivity, vocabulary: li
         if not set(item.target_words).issubset(vocabulary) or len(set(item.target_words)) != len(item.target_words):
             raise ValueError("Question vocabulary must use distinct original lesson words.")
         if vocabulary and item.kind != "observation" and not item.target_words:
-            raise ValueError("Application and discussion questions must practice lesson vocabulary.")
+            raise ValueError("Application and discussion questions must practice lesson vocabulary. "
+                             f"The {item.kind} question and answer contain NONE of the original terms. "
+                             "Rewrite that question or answer to actually USE relevant original phrases from: "
+                             + ", ".join(vocabulary) + ". Declaring vocabulary tags does not count.")
         text = " ".join((item.question + " " + item.answer).split())
         for word in item.target_words:
             if not uses_vocabulary(word, text):
