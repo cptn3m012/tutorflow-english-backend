@@ -548,6 +548,9 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int, picture_asse
     add_bullets(doc, lesson.sentence_frames)
 
     if lesson.visual_activity and doc.options.include_visual_activity:
+        if lesson.visual_activity.asset_id and doc.options.include_images:
+            # Keep the heading, image and opening instruction on the same page.
+            doc.ensure_space(430)
         add_section(doc, 8, "Visual task")
         asset_id = lesson.visual_activity.asset_id
         if asset_id and asset_id in picture_assets and doc.options.include_images:
