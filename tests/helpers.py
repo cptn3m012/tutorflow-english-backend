@@ -20,6 +20,13 @@ COMPREHENSION = {"items": [
      "evidence": "After breakfast, she asks for the bill and pays with her card."},
 ]}
 
+# Model output uses passage sentence IDs; public/PDF fixtures retain literal quotes.
+COMPREHENSION_SELECTION = {"items": [
+    {"question": item["question"], "answer": item["answer"],
+     "evidence_start": sentence_id, "evidence_end": sentence_id}
+    for item, sentence_id in zip(COMPREHENSION["items"], (1, 2, 5))
+]}
+
 
 def make_lesson(**updates) -> LessonVariant:
     data = {

@@ -1,9 +1,39 @@
 import re
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.errors import LessonQualityError
 from app.ollama_client import generate_from_ollama
 from app.prompts import build_reading_comprehension_prompt
-from app.schemas import LessonVariant, ReadingComprehension
+from app.schemas import LessonVariant, NonEmptyText, ReadingQuestionAnswer
+
+
+class ReadingEvidenceSelection(BaseModel):
+    """Internal model output; public answer keys retain literal passage evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: NonEmptyText
+    answer: NonEmptyText
+    evidence_start: int = Field(ge=1, strict=True)
+    evidence_end: int = Field(ge=1, strict=True)
+
+
+class ReadingComprehensionSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ReadingEvidenceSelection] = Field(min_length=1, max_length=8)
+
+
+def reading_sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Keep offsets into the original passage so punctuation and spacing survive."""
+    spans = []
+    start = 0
+    for boundary in re.finditer(r'(?<=[.!?])\s+(?=[A-Z"“])', text):
+        spans.append((start, boundary.start()))
+        start = boundary.end()
+    spans.append((start, len(text)))
+    return [span for span in spans if text[span[0]:span[1]].strip()]
 
 
 def normalize_whitespace(text: str) -> str:
@@ -31,20 +61,40 @@ def validate_reading_comprehension(lesson: LessonVariant, question_count: int) -
 async def generate_reading_comprehension(
     lesson: LessonVariant, level: str, question_count: int, feedback: str = "",
 ) -> LessonVariant:
-    schema = ReadingComprehension.model_json_schema()
+    spans = reading_sentence_spans(lesson.reading_text)
+    if not spans:
+        raise LessonQualityError("Cannot generate reading questions from an empty passage.")
+    sentences = [lesson.reading_text[start:end] for start, end in spans]
+    schema = ReadingComprehensionSelection.model_json_schema()
     schema["properties"]["items"].update(minItems=question_count, maxItems=question_count)
+    for field in ("evidence_start", "evidence_end"):
+        schema["$defs"]["ReadingEvidenceSelection"]["properties"][field]["maximum"] = len(spans)
     last_error = feedback
 
     for _ in range(3):
         prompt = build_reading_comprehension_prompt(
             level, lesson.title, lesson.lesson_goal, lesson.reading_text, question_count, last_error,
+            sentences=sentences,
         )
         raw_response = await generate_from_ollama(prompt, json_schema=schema, task="comprehension")
         try:
-            result = ReadingComprehension.model_validate_json(raw_response)
+            result = ReadingComprehensionSelection.model_validate_json(raw_response)
+            answers = []
+            for item in result.items:
+                if not 1 <= item.evidence_start <= item.evidence_end <= len(spans):
+                    raise LessonQualityError(
+                        f"Evidence sentence range for '{item.question}' must satisfy "
+                        f"1 <= evidence_start <= evidence_end <= {len(spans)}."
+                    )
+                start = spans[item.evidence_start - 1][0]
+                end = spans[item.evidence_end - 1][1]
+                answers.append(ReadingQuestionAnswer(
+                    question=item.question, answer=item.answer,
+                    evidence=lesson.reading_text[start:end],
+                ))
             candidate = lesson.model_copy(update={
-                "reading_questions": [item.question for item in result.items],
-                "reading_answers": result.items,
+                "reading_questions": [item.question for item in answers],
+                "reading_answers": answers,
             })
             validate_reading_comprehension(candidate, question_count)
         except ValueError as error:

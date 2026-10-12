@@ -10,7 +10,7 @@ from app.main import app
 from app.quality_service import review_lesson_quality
 from app.schemas import LessonAdvancedOptions, LessonQualityIssue, ReadingQuestionAnswer
 from app.worksheet_service import repair_cloze_asset, validate_cloze_asset
-from tests.helpers import COMPREHENSION, READING, make_lesson
+from tests.helpers import COMPREHENSION, COMPREHENSION_SELECTION, READING, make_lesson
 
 
 def answered_lesson(**updates):
@@ -34,7 +34,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    side_effect=reviews) as review_generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)) as question_generate, \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)) as question_generate, \
              patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock) as reading_generate:
             await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
         reading_generate.assert_not_awaited()
@@ -50,7 +50,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         options = LessonAdvancedOptions(include_visual_activity=False)
         ensure_worksheet_assets([lesson], options)
         rewritten = READING.replace("Anna", "Maria")
-        updated_answers = json.dumps(COMPREHENSION).replace("Anna", "Maria")
+        updated_answers = json.dumps(COMPREHENSION_SELECTION).replace("Anna", "Maria")
         with patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock,
                    side_effect=[[LessonQualityIssue(section="reading", message="Repair the passage content.")], []]), \
              patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
@@ -95,7 +95,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value=READING) as reading_generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)), \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)), \
              patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock, return_value=[]) as review:
             await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
         self.assertEqual(reading_generate.await_count, 1)
@@ -163,7 +163,7 @@ class GenerationIntegrationTests(unittest.TestCase):
         async def questions(prompt, **kwargs):
             events.append("questions")
             self.assertIn(READING, prompt)
-            return json.dumps(COMPREHENSION)
+            return json.dumps(COMPREHENSION_SELECTION)
         async def review(prompt, **kwargs):
             events.append("review")
             self.assertIn('"answer": "Tea and a sandwich."', prompt)
@@ -192,7 +192,7 @@ class GenerationIntegrationTests(unittest.TestCase):
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value=json.dumps({"lessons": [draft]})) as generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)), \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)), \
              patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value="{}"), TestClient(app) as client:
             response = client.post("/lessons/generate", json={
