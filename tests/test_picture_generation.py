@@ -17,7 +17,10 @@ from app.comfy_client import PictureError, build_workflow
 from app.config import ImageSettings
 from app.database import build_engine, migrate_database
 from app.models import LessonImageRecord, PictureJobRecord, SavedLessonRecord
-from app.picture_generation import PictureObservation, ScenePlan, inspect_picture, plan_scene, prepare_picture
+from app.picture_generation import (
+    PictureObservation, ScenePlan, TopicRelevanceReview, inspect_picture, plan_scene, prepare_picture,
+    review_scene_topic,
+)
 from app.picture_worker import process_job, recover_jobs
 from tests.helpers import make_lesson
 
@@ -37,16 +40,58 @@ def picture_bytes():
     return output.getvalue()
 
 
+def topic_approval():
+    return TopicRelevanceReview(faithful=True, missing_objects=[], issues=[], repair_instructions="")
+
+
 class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_planner_uses_small_model_and_recognizable_objects_without_reading_tiny_text(self):
-        with patch("app.picture_generation.vision_json", new_callable=AsyncMock, return_value=json.dumps({
-            "scene": "A simple cafe table with a cup, plate and chair.", "required_objects": ["cup", "plate", "chair"],
-        })) as model:
-            await plan_scene({"target_vocabulary": ["bill", "polite"]}, "A2", "Cafe", ImageSettings())
-        self.assertIsNone(model.await_args.args[0])  # Text-only planning in the small vision model.
-        allowed = model.await_args.args[2]["properties"]["required_objects"]["items"]["enum"]
-        self.assertNotIn("bill", allowed)
-        self.assertIn("cup", allowed)
+    async def test_planner_uses_topic_objects_without_a_global_vocabulary_whitelist(self):
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock, return_value=json.dumps({
+            "scene": "Visitors place flowers and light candles beside graves in a Polish cemetery.",
+            "required_objects": ["grave", "candle", "flower"],
+            "excluded_objects": ["sofa", "bowl", "spoon"],
+            "source_evidence": "Visitors put flowers and candles on graves.",
+        })) as model, patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock,
+                            return_value=topic_approval()):
+            plan = await plan_scene({"reading_text": "Visitors put flowers and candles on graves."}, "A2", "All Saints' Day in Poland", ImageSettings())
+        fields = model.await_args.args[1]["properties"]
+        self.assertNotIn("enum", fields["required_objects"]["items"])
+        self.assertIn("Visitors put flowers and candles on graves.", fields["source_evidence"]["enum"])
+        self.assertEqual(plan.required_objects, ["grave", "candle", "flower"])
+
+    async def test_incongruous_plan_is_repaired_before_rendering(self):
+        bad = {"scene": "A sofa and a bowl stand beside graves in a cemetery.",
+               "required_objects": ["couch", "bowl", "grave"], "excluded_objects": [], "source_evidence": "People visit graves."}
+        good = {"scene": "People stand beside graves and place flowers on them.",
+                "required_objects": ["grave", "flower"], "excluded_objects": ["sofa"], "source_evidence": "People visit graves."}
+        rejection = TopicRelevanceReview(faithful=False, missing_objects=[], issues=["A sofa and bowl do not belong in a cemetery."],
+                                        repair_instructions="Show cemetery graves and flowers with no household furniture.")
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock,
+                   side_effect=[json.dumps(bad), json.dumps(good)]) as model, \
+             patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock,
+                   side_effect=[rejection, topic_approval()]):
+            plan = await plan_scene({"reading_text": "People visit graves."}, "A2", "All Saints' Day", ImageSettings())
+        self.assertEqual(plan.required_objects, ["grave", "flower"])
+        self.assertEqual(model.await_count, 2)
+        self.assertIn("no household furniture", model.await_args.args[0])
+
+    async def test_invented_plan_grounding_exhausts_bounded_retries(self):
+        invalid = {"scene": "Visitors stand beside graves in an autumn cemetery.",
+                   "required_objects": ["grave", "candle"], "excluded_objects": [], "source_evidence": "Invented sentence."}
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock, return_value=json.dumps(invalid)) as model, \
+             patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock) as review:
+            with self.assertRaisesRegex(PictureError, "plan did not match"):
+                await plan_scene({"reading_text": "People visit graves."}, "A2", "All Saints' Day", ImageSettings())
+        self.assertEqual(model.await_count, 2)
+        review.assert_not_awaited()
+
+    def test_missing_or_contradictory_topic_verdict_never_approves(self):
+        for data in ({}, {"faithful": True, "missing_objects": [], "issues": ["Sofa in a cemetery"], "repair_instructions": ""},
+                     {"faithful": False, "missing_objects": [], "issues": [], "repair_instructions": ""},
+                     {"faithful": "true", "missing_objects": [], "issues": [], "repair_instructions": ""},
+                     {"faithful": True, "missing_objects": ["grave"], "issues": [], "repair_instructions": ""}):
+            with self.subTest(data=data), self.assertRaises(ValidationError):
+                TopicRelevanceReview.model_validate(data)
 
     async def test_questions_are_constrained_to_blindly_observed_objects(self):
         observed = observation().model_dump(exclude={"questions"})
@@ -60,39 +105,98 @@ class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(enum, ["cup", "plate", "menu"])
         self.assertEqual(result.questions[0].object_names, ["cup"])
 
+    async def test_observed_sofa_in_cemetery_cannot_be_rubber_stamped_by_model(self):
+        plan = ScenePlan(scene="Visitors light candles beside graves in a cemetery.", required_objects=["grave", "candle"],
+                         excluded_objects=["sofa", "bowl"], source_evidence="People visit graves.")
+        observed = observation().model_copy(update={"objects": [
+            *observation().objects,
+            observation().objects[0].model_copy(update={"name": "grey couch"}),
+        ]})
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock) as model:
+            result = await review_scene_topic(picture_bytes(), {}, plan, ImageSettings(), observed)
+        self.assertFalse(result.faithful)
+        self.assertIn("sofa", result.issues[0])
+        model.assert_not_awaited()
+
+    async def test_same_sofa_is_allowed_for_a_living_room_lesson(self):
+        plan = ScenePlan(scene="People sit on a sofa in their living room.", required_objects=["sofa", "lamp"],
+                         excluded_objects=["grave"], source_evidence="People sit in their living room.")
+        observed = observation().model_copy(update={"objects": [
+            *observation().objects, observation().objects[0].model_copy(update={"name": "grey couch"}),
+        ]})
+        with patch("app.picture_generation.planner_json", new_callable=AsyncMock,
+                   return_value=topic_approval().model_dump_json()) as model, \
+             patch("app.picture_generation.unload_ollama", new_callable=AsyncMock) as unload:
+            result = await review_scene_topic(picture_bytes(), {}, plan, ImageSettings(), observed)
+        self.assertTrue(result.faithful)
+        model.assert_awaited_once()
+        self.assertEqual([call.args[0] for call in unload.await_args_list], [ImageSettings().vision_model, ImageSettings().planner_model])
+
     def test_duplicate_sightings_do_not_duplicate_the_word_bank(self):
         data = observation().model_dump()
         data["objects"].append(data["objects"][0])
         self.assertEqual(len(PictureObservation.model_validate(data).objects), 3)
 
     async def test_inspection_is_blind_and_missing_objects_have_one_retry(self):
-        plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"])
+        plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"], excluded_objects=[], source_evidence="Cafe")
         wrong = observation().model_copy(update={"objects": observation().objects[:2]})
         progress = AsyncMock()
         with patch("app.picture_generation.free_comfy", new_callable=AsyncMock), \
              patch("app.picture_generation.unload_ollama", new_callable=AsyncMock), \
              patch("app.picture_generation.plan_scene", new_callable=AsyncMock, return_value=plan), \
              patch("app.picture_generation.render_picture", new_callable=AsyncMock, return_value=picture_bytes()) as render, \
-             patch("app.picture_generation.inspect_picture", new_callable=AsyncMock, side_effect=[wrong, observation()]) as inspect:
+             patch("app.picture_generation.observe_picture", new_callable=AsyncMock, side_effect=[wrong, observation()]) as inspect, \
+             patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock, side_effect=[
+                 TopicRelevanceReview(faithful=False, missing_objects=["menu"], issues=["Menu is missing."], repair_instructions="Show the menu on the cafe table."),
+                 topic_approval(),
+             ]), \
+             patch("app.picture_generation.prepare_picture_questions", new_callable=AsyncMock, return_value=observation()) as questions:
             _, metadata = await prepare_picture({}, "A2", "Cafe", "photo", 42, ImageSettings(), progress)
         self.assertEqual(render.await_count, 2)
         self.assertEqual(metadata["seed"], 43)
         self.assertEqual(metadata["attempts"], 2)
         for call in inspect.await_args_list:
-            self.assertEqual(call.args[1], "A2")
-            self.assertEqual(len(call.args), 3)  # Pixels, CEFR and server settings; no requested objects.
+            self.assertEqual(len(call.args), 2)  # Pixels and server settings; no requested objects or lesson context.
+        self.assertEqual(questions.await_count, 1)
 
     async def test_two_unsuitable_images_fail_instead_of_inventing_answer_key(self):
-        plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"])
+        plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"], excluded_objects=[], source_evidence="Cafe")
         unsuitable = observation().model_copy(update={"objects": []})
         with patch("app.picture_generation.free_comfy", new_callable=AsyncMock), \
              patch("app.picture_generation.unload_ollama", new_callable=AsyncMock), \
              patch("app.picture_generation.plan_scene", new_callable=AsyncMock, return_value=plan), \
              patch("app.picture_generation.render_picture", new_callable=AsyncMock, return_value=picture_bytes()) as render, \
-             patch("app.picture_generation.inspect_picture", new_callable=AsyncMock, return_value=unsuitable):
+             patch("app.picture_generation.observe_picture", new_callable=AsyncMock, return_value=unsuitable), \
+             patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock, return_value=TopicRelevanceReview(
+                 faithful=False, missing_objects=["cup", "plate", "menu"], issues=["All cafe objects are absent."],
+                 repair_instructions="Show the cafe objects on the cafe table.")):
             with self.assertRaisesRegex(PictureError, "two attempts"):
                 await prepare_picture({}, "A2", "Cafe", "photo", 42, ImageSettings(), AsyncMock())
         self.assertEqual(render.await_count, 2)
+
+    async def test_off_topic_picture_is_retried_even_when_all_required_objects_are_visible(self):
+        plan = ScenePlan(scene="A simple cafe table beside a window.", required_objects=["cup", "plate", "menu"], excluded_objects=[], source_evidence="Cafe")
+        rejected = TopicRelevanceReview(faithful=False, missing_objects=[], issues=["Objects are in an unrelated bedroom."],
+                                        repair_instructions="Place the table in the cafe described by the lesson.")
+        for reviews in ([rejected, topic_approval()], [rejected, rejected]):
+            with self.subTest(approved=reviews[-1].faithful), \
+                 patch("app.picture_generation.free_comfy", new_callable=AsyncMock), \
+                 patch("app.picture_generation.unload_ollama", new_callable=AsyncMock), \
+                 patch("app.picture_generation.plan_scene", new_callable=AsyncMock, return_value=plan), \
+                 patch("app.picture_generation.render_picture", new_callable=AsyncMock, return_value=picture_bytes()) as render, \
+                 patch("app.picture_generation.observe_picture", new_callable=AsyncMock, return_value=observation()), \
+                 patch("app.picture_generation.review_scene_topic", new_callable=AsyncMock, side_effect=reviews), \
+                 patch("app.picture_generation.prepare_picture_questions", new_callable=AsyncMock, return_value=observation()) as questions:
+                if reviews[-1].faithful:
+                    _, metadata = await prepare_picture({}, "A2", "Cafe", "photo", 42, ImageSettings(), AsyncMock())
+                    self.assertTrue(metadata["topic_review"]["faithful"])
+                    self.assertEqual(questions.await_count, 1)
+                else:
+                    with self.assertRaisesRegex(PictureError, "did not match the lesson topic after two attempts"):
+                        await prepare_picture({}, "A2", "Cafe", "photo", 42, ImageSettings(), AsyncMock())
+                    questions.assert_not_awaited()
+                self.assertEqual(render.await_count, 2)
+                self.assertIn("table in the cafe", render.await_args.args[0])
 
     def test_question_cannot_reference_an_unobserved_object(self):
         data = observation().model_dump()

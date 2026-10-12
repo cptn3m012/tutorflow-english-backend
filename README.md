@@ -138,7 +138,8 @@ uses these weights in ComfyUI's model directories:
 | `qwen_3_4b.safetensors` | `models/text_encoders` | [Comfy-Org](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) |
 | `flux2-vae.safetensors` | `models/vae` | [Comfy-Org](https://huggingface.co/Comfy-Org/flux2-dev/tree/main/split_files/vae) |
 
-Pull the vision model with `ollama pull qwen3-vl:4b-instruct`, set
+Pull the planner with `ollama pull qwen3:14b` and the vision model with
+`ollama pull qwen3-vl:4b-instruct`. Set
 `LOCAL_IMAGES_ENABLED=true` in the private `.env`, and start ComfyUI on loopback.
 For the dedicated installation, enable `COMFYUI_MANAGED_RUNTIME=true` to release
 the runtime's GPU and host-memory allocations between stages. The backend launches
@@ -161,10 +162,19 @@ with `GET /lessons/picture-drafts/{lesson_id}`. Working copies are excluded from
 library listings and saved-lesson views. An explicit `PUT /lessons/saved/{lesson_id}`
 promotes the working copy, retaining its canonical picture and any active job.
 
-The small Qwen model plans scenes, avoiding an extra reload of the lesson LLM.
-It observes pixels before seeing any planned object list. Questions
-then use a schema restricted to the observed objects. A picture missing required
-objects is regenerated once; failure keeps the text and previous picture intact.
+The local `IMAGE_PLANNER_MODEL` (Qwen3 14B by default) plans one scene grounded in a literal source excerpt and
+reviews the plan before releasing its GPU memory. Essential objects come from that scene
+instead of a global vocabulary whitelist. A separate plan review checks its setting,
+activity and cultural fit before rendering. Qwen3-VL observes pixels without the
+plan or lesson context, then the larger planner checks those blind observations
+against the selected scene. The models release GPU memory between stages.
+The planner also specifies incompatible object types for that particular scene.
+Clearly observed excluded props reject an image even when a general vision verdict
+would approve it; ordinary objects appropriate to another lesson remain available.
+The image check assesses required-object presence visually, including natural synonyms.
+Questions are prepared only after acceptance and refer to observed objects central
+to the lesson topic. A picture missing essential objects or contradicting the topic
+is regenerated once with targeted feedback; failure keeps the text and previous picture intact.
 Pictures and corresponding activities are published in one database transaction.
 Both PDF editions embed the stored image; only the teacher edition contains answers
 and evidence. Model checks can still make mistakes, so review materials before teaching.

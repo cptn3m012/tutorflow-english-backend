@@ -105,6 +105,7 @@ async def process_job(app, engine, job: dict, settings: ImageSettings):
             try:
                 if not settings.managed_runtime:
                     await free_comfy(settings)
+                await unload_ollama(settings.planner_model)
                 await unload_ollama(settings.vision_model)
             except PictureError:
                 logger.warning("Local picture model cleanup failed")

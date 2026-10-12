@@ -64,6 +64,7 @@ class ImageSettings:
     comfy_url: str = "http://127.0.0.1:8188"
     model: str = "flux2-klein-4b"
     vision_model: str = "qwen3-vl:4b-instruct"
+    planner_model: str = "qwen3:14b"
     storage_dir: Path = PROJECT_ROOT / "data" / "lesson-images"
     timeout_seconds: float = 300.0
     managed_runtime: bool = False
@@ -75,6 +76,7 @@ class ImageSettings:
             comfy_url=os.getenv("COMFYUI_BASE_URL", cls.comfy_url).rstrip("/"),
             model=os.getenv("IMAGE_MODEL", cls.model),
             vision_model=os.getenv("IMAGE_VISION_MODEL", cls.vision_model),
+            planner_model=os.getenv("IMAGE_PLANNER_MODEL", cls.planner_model),
             storage_dir=Path(os.getenv("IMAGE_STORAGE_DIR", str(cls.storage_dir))).resolve(),
             timeout_seconds=float(os.getenv("IMAGE_TIMEOUT_SECONDS", str(cls.timeout_seconds))),
             managed_runtime=os.getenv("COMFYUI_MANAGED_RUNTIME", "false").lower() == "true",
@@ -89,7 +91,7 @@ class ImageSettings:
             raise ValueError("COMFYUI_BASE_URL must be a loopback HTTP origin.")
         if self.model not in ("flux2-klein-4b", "z-image-turbo"):
             raise ValueError("IMAGE_MODEL must be flux2-klein-4b or z-image-turbo.")
-        if not self.vision_model or not 30 <= self.timeout_seconds <= 600:
+        if not self.vision_model.strip() or not self.planner_model.strip() or not 30 <= self.timeout_seconds <= 600:
             raise ValueError("Image generation requires a vision model and a timeout between 30 and 600 seconds.")
         if self.enabled:
             ollama_url = urlsplit(OllamaSettings.from_environment().base_url)
