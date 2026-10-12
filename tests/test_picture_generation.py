@@ -17,7 +17,7 @@ from app.comfy_client import PictureError, build_workflow
 from app.config import ImageSettings
 from app.database import build_engine, migrate_database
 from app.models import LessonImageRecord, PictureJobRecord, SavedLessonRecord
-from app.picture_generation import PictureObservation, ScenePlan, inspect_picture, prepare_picture
+from app.picture_generation import PictureObservation, ScenePlan, inspect_picture, plan_scene, prepare_picture
 from app.picture_worker import process_job, recover_jobs
 from tests.helpers import make_lesson
 
@@ -38,6 +38,16 @@ def picture_bytes():
 
 
 class PictureGenerationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_planner_uses_small_model_and_recognizable_objects_without_reading_tiny_text(self):
+        with patch("app.picture_generation.vision_json", new_callable=AsyncMock, return_value=json.dumps({
+            "scene": "A simple cafe table with a cup, plate and chair.", "required_objects": ["cup", "plate", "chair"],
+        })) as model:
+            await plan_scene({"target_vocabulary": ["bill", "polite"]}, "A2", "Cafe", ImageSettings())
+        self.assertIsNone(model.await_args.args[0])  # Text-only planning in the small vision model.
+        allowed = model.await_args.args[2]["properties"]["required_objects"]["items"]["enum"]
+        self.assertNotIn("bill", allowed)
+        self.assertIn("cup", allowed)
+
     async def test_questions_are_constrained_to_blindly_observed_objects(self):
         observed = observation().model_dump(exclude={"questions"})
         with patch("app.picture_generation.vision_json", new_callable=AsyncMock, side_effect=[
