@@ -3,12 +3,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import SavedLessonRecord
+from app.models import PictureJobRecord, SavedLessonRecord
 from app.saved_lesson_schemas import FavoriteUpdate, SavedLesson, SavedLessonPage
 
 router = APIRouter(prefix="/lessons/saved", tags=["Saved lessons"])
@@ -26,9 +26,9 @@ def to_lesson(record: SavedLessonRecord) -> SavedLesson:
     )
 
 
-def find_lesson(session: Session, lesson_id: UUID) -> SavedLessonRecord:
+def find_lesson(session: Session, lesson_id: UUID, *, allow_draft: bool = False) -> SavedLessonRecord:
     record = session.get(SavedLessonRecord, str(lesson_id))
-    if record is None:
+    if record is None or (record.is_draft and not allow_draft):
         raise HTTPException(status_code=404, detail="Saved lesson not found.")
     return record
 
@@ -41,10 +41,11 @@ def list_saved_lessons(
 ):
     records = session.scalars(
         select(SavedLessonRecord)
+        .where(SavedLessonRecord.is_draft.is_(False))
         .order_by(SavedLessonRecord.saved_at.desc(), SavedLessonRecord.id)
         .offset(offset).limit(limit)
     ).all()
-    total = session.scalar(select(func.count()).select_from(SavedLessonRecord))
+    total = session.scalar(select(func.count()).select_from(SavedLessonRecord).where(SavedLessonRecord.is_draft.is_(False)))
     return SavedLessonPage(items=[to_lesson(record) for record in records], total=total)
 
 
@@ -58,8 +59,16 @@ def save_lesson(lesson_id: UUID, payload: SavedLesson, session: DatabaseSession)
     """Idempotent create for saves, browser imports and undo. Never overwrite a save."""
     if lesson_id != payload.id:
         raise HTTPException(status_code=422, detail="Path ID must match the saved lesson ID.")
-    record = session.get(SavedLessonRecord, str(lesson_id))
+    record = session.scalar(select(SavedLessonRecord).where(SavedLessonRecord.id == str(lesson_id)).with_for_update())
     if record is not None:
+        if record.is_draft:
+            # Preserve the canonical picture, including a worker finishing while
+            # the browser saves. Promoting does not replace the stored content.
+            record.is_draft = False
+            record.favorite = payload.favorite
+            record.saved_at = payload.saved_at
+            session.commit()
+            session.refresh(record)
         return to_lesson(record)
     timestamp = payload.saved_at
     timestamp = timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
@@ -95,6 +104,7 @@ def update_favorite(lesson_id: UUID, payload: FavoriteUpdate, session: DatabaseS
 def delete_saved_lesson(lesson_id: UUID, session: DatabaseSession):
     record = session.get(SavedLessonRecord, str(lesson_id))
     if record is not None:
+        session.execute(delete(PictureJobRecord).where(PictureJobRecord.lesson_id == str(lesson_id)))
         session.delete(record)
         session.commit()
     return Response(status_code=204)

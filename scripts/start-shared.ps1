@@ -35,6 +35,7 @@ try {
 
     $env:PUBLIC_SHARE_MODE = 'true'
     $env:FRONTEND_DIST_DIR = Join-Path $frontendDirectory 'dist'
+    & (Join-Path $PSScriptRoot 'start-images.ps1') -IfEnabled
     Write-Host "TutorFlow sharing mode: http://127.0.0.1:$Port"
     Write-Host 'Login credentials are SHARE_USERNAME and SHARE_PASSWORD in backend .env.'
     Push-Location -LiteralPath $backendPath

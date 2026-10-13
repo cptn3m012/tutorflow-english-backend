@@ -1,6 +1,6 @@
 # TutorFlow English Backend
 
-A FastAPI backend for generating English lesson materials with CEFR-aligned content, visual activities, worksheet assets, image suggestions, and PDF export.
+A FastAPI backend for generating English lesson materials with CEFR-aligned content, worksheets, local picture-description activities, and PDF export.
 
 The application is designed for teachers, tutors, and language-learning tools that need structured lesson content generated from a topic, date, level, and teaching preferences.
 
@@ -13,8 +13,9 @@ The application is designed for teachers, tutors, and language-learning tools th
 - Align lesson goals with CEFR communication, vocabulary, and grammar targets.
 - Configure lesson length, vocabulary count, question count, skill focus, lesson style, and visual activity settings.
 - Generate worksheet-style activities.
-- Generate `find_in_picture` visual tasks for classroom or printable materials.
-- Optionally search for lesson images through Openverse and Pexels.
+- Generate lesson pictures locally with ComfyUI and FLUX.2 klein 4B.
+- Prepare picture-description questions from actual image observations using Qwen3-VL.
+- Keep picture generation separate from text generation, with persistent jobs and immutable image versions.
 - Export generated lessons as PDF files.
 - Preview generated PDFs directly in the browser.
 - Save lesson variants and favourites in a shared PostgreSQL library.
@@ -111,24 +112,87 @@ Optional environment variables:
 | `OLLAMA_KEEP_ALIVE` | How long Ollama keeps the model loaded between requests | `10m` |
 | `OLLAMA_REASONING_EFFORT` | GPT-OSS reasoning effort for generation and section repairs: `low`, `medium`, or `high` | `low` |
 | `OLLAMA_REVIEW_REASONING_EFFORT` | GPT-OSS reasoning effort for semantic quality review | `medium` |
-| `OPENVERSE_API_URL` | Openverse image search API URL | `https://api.openverse.org/v1/images/` |
-| `PEXELS_API_URL` | Pexels search API URL | `https://api.pexels.com/v1/search` |
-| `PEXELS_API_KEY` | Optional Pexels API key | unset |
-| `IMAGE_PROVIDER_MODE` | Image search mode. Use `off`, `offline`, `local`, or `disabled` to disable remote image search. | `remote` |
-
-Example on Windows PowerShell:
-
-```powershell
-$env:PEXELS_API_KEY="your_pexels_api_key"
-```
-
-Disable remote image search:
-
-```powershell
-$env:IMAGE_PROVIDER_MODE="off"
-```
+| `LOCAL_IMAGES_ENABLED` | Enable the local picture worker | `false` |
+| `COMFYUI_BASE_URL` | Local ComfyUI origin; loopback addresses only | `http://127.0.0.1:8188` |
+| `COMFYUI_MANAGED_RUNTIME` | Start the dedicated runtime only during rendering and stop it before Ollama uses the GPU | `false` |
+| `IMAGE_MODEL` | Fixed preset: `flux2-klein-4b` or `z-image-turbo` | `flux2-klein-4b` |
+| `IMAGE_VISION_MODEL` | Local Ollama vision model | `qwen3-vl:4b-instruct` |
+| `IMAGE_TIMEOUT_SECONDS` | Per-stage picture timeout, 30–600 seconds | `300` |
+| `IMAGE_STORAGE_DIR` | Private directory for generated JPEG files | `data/lesson-images` |
 
 Local `.env` files are ignored by Git.
+
+### Local pictures
+
+Install [ComfyUI](https://docs.comfy.org/installation/manual_install) in
+`data/image-runtime/ComfyUI`, using a separate Python environment at
+`data/image-runtime/venv`. Its dependencies are separate from the backend.
+Use core nodes only; no custom extensions or paid APIs are needed.
+
+The [FLUX.2 klein distilled workflow](https://docs.comfy.org/tutorials/flux/flux-2-klein)
+uses these weights in ComfyUI's model directories:
+
+| File | Directory | Official download |
+| --- | --- | --- |
+| `flux-2-klein-4b-fp8.safetensors` | `models/diffusion_models` | [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/tree/main) |
+| `qwen_3_4b.safetensors` | `models/text_encoders` | [Comfy-Org](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) |
+| `flux2-vae.safetensors` | `models/vae` | [Comfy-Org](https://huggingface.co/Comfy-Org/flux2-dev/tree/main/split_files/vae) |
+
+Pull the planner with `ollama pull qwen3:14b` and the vision model with
+`ollama pull qwen3-vl:4b-instruct`. Set
+`LOCAL_IMAGES_ENABLED=true` in the private `.env`, and start ComfyUI on loopback.
+For the dedicated installation, enable `COMFYUI_MANAGED_RUNTIME=true` to release
+the runtime's GPU and host-memory allocations between stages. The backend launches
+only its own runtime and never terminates a pre-existing service. Do not also start
+standalone ComfyUI in this mode. Alternatively, `scripts/start-images.ps1` starts
+an installed standalone service in the background on Windows.
+Keep one backend worker: text and picture generation share one GPU semaphore.
+
+Create a job for a saved lesson with
+`POST /lessons/saved/{lesson_id}/picture-jobs` and `{"style":"photo"}` or
+`{"style":"illustration"}`. Read the latest job with `GET` at the same path.
+`GET /lessons/saved/{lesson_id}/picture-jobs/{job_id}/events` streams progress as SSE.
+Generated files are available through authenticated `/lesson-images/{asset_id}`
+endpoints; browser requests cannot supply a workflow, model filename or local path.
+
+Pictures can also be generated before saving to the library. Create an idempotent
+working copy with `PUT /lessons/picture-drafts/{lesson_id}` using the lesson payload,
+then use the same picture job endpoints with its UUID. Retrieve its latest content
+with `GET /lessons/picture-drafts/{lesson_id}`. Working copies are excluded from
+library listings and saved-lesson views. An explicit `PUT /lessons/saved/{lesson_id}`
+promotes the working copy, retaining its canonical picture and any active job.
+
+The local `IMAGE_PLANNER_MODEL` (Qwen3 14B by default) plans one scene grounded in a literal source excerpt and
+reviews the plan before releasing its GPU memory. Essential objects come from that scene
+instead of a global vocabulary whitelist. A separate plan review checks its setting,
+activity and cultural fit before rendering. Qwen3-VL observes pixels without the
+plan or lesson context, then the larger planner checks those blind observations
+against the selected scene. The models release GPU memory between stages.
+The planner also specifies incompatible object types for that particular scene.
+Clearly observed excluded props reject an image even when a general vision verdict
+would approve it; ordinary objects appropriate to another lesson remain available.
+The image check assesses required-object presence visually, including natural synonyms.
+Scene plans link selected original vocabulary to visible cues or meaningful discussion.
+Abstract concepts may use a representative illustrative scenario, anchored to the reading
+and explicitly distinguished from events narrated in it. Prominent garbled lettering
+requires regeneration; words are rendered separately in the interface and PDF.
+Pictures avoid text-heavy screens and generic lectures about the topic.
+Questions are prepared after acceptance by the text planner, using blind observations.
+An activity has one factual observation, one lesson application and one open discussion
+prompt, all anchored in visible objects. Application and discussion use original lesson vocabulary;
+abstract words are not forced into factual observations. Application and
+discussion answers are examples, not uniquely correct facts. Vocabulary coverage,
+sentence starters and a separate activity review are validated before publication.
+Used vocabulary is identified from the actual question and answer text rather than model-supplied tags.
+Question repairs keep the accepted picture. A picture missing essential objects or contradicting the topic
+is regenerated once with targeted feedback; failure keeps the text and previous picture intact.
+Pictures and corresponding activities are published in one database transaction.
+Both PDF editions embed the stored image; only the teacher edition contains answers
+and evidence. Model checks can still make mistakes, so review materials before teaching.
+
+Image files, model weights and runtime logs live under ignored `data/`; PostgreSQL
+stores their metadata and jobs. Back up both the database and `data/lesson-images`.
+Deleted lesson images are retained for Undo and hidden while the lesson is absent.
 
 ### Local model generation
 
@@ -399,7 +463,9 @@ english-lesson-app-backend/
 | `app/schemas.py` | Defines Pydantic request and response models |
 | `app/cefr_service.py` | Handles CEFR profile lookup, normalization, and target matching |
 | `app/cefr_data.py` | Stores CEFR reference data used by the application |
-| `app/image_service.py` | Handles image search through Openverse and Pexels |
+| `app/picture_generation.py` | Plans scenes, renders local pictures and grounds questions in observations |
+| `app/picture_worker.py` | Processes persistent picture jobs on the shared GPU queue |
+| `app/picture_storage.py` | Stores private JPEG image versions |
 | `app/pdf_service.py` | Builds and renders PDF lesson exports |
 | `app/theme_service.py` | Resolves lesson themes from topics or calendar dates |
 

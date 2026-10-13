@@ -1,6 +1,7 @@
 import re
 
 from app.errors import LessonQualityError
+from app.generation_policy import LESSON_MAX_ATTEMPTS
 from app.ollama_client import generate_from_ollama
 from app.prompts import build_cloze_repair_prompt
 from app.reading_service import normalize_whitespace
@@ -116,7 +117,7 @@ def build_fill_in_the_blanks_asset(lesson: LessonVariant) -> LessonWorksheetAsse
 async def repair_cloze_asset(lesson: LessonVariant, feedback: str) -> LessonWorksheetAsset:
     context = {"reading_text": lesson.reading_text, "target_vocabulary": lesson.target_vocabulary}
     last_error = feedback
-    for _ in range(3):
+    for _ in range(LESSON_MAX_ATTEMPTS):
         raw_response = await generate_from_ollama(
             build_cloze_repair_prompt(context, last_error), json_schema=ClozeExercise.model_json_schema(), task="cloze",
         )
@@ -135,4 +136,4 @@ async def repair_cloze_asset(lesson: LessonVariant, feedback: str) -> LessonWork
         except ValueError as error:
             last_error = f"{feedback}\nStructural validation also failed: {error}"
 
-    raise LessonQualityError(f"Cloze repair failed for '{lesson.title}' after 3 attempts: {last_error}")
+    raise LessonQualityError(f"Cloze repair failed for '{lesson.title}' after {LESSON_MAX_ATTEMPTS} attempts: {last_error}")

@@ -2,6 +2,7 @@ import json
 from datetime import datetime, UTC
 
 from app.errors import LessonQualityError
+from app.generation_policy import LESSON_MAX_ATTEMPTS
 from app.generation_schemas import build_lesson_draft_schema
 from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
 from app.quality_service import review_lesson_quality
@@ -19,7 +20,6 @@ from app.schemas import (
     LessonWorksheetAsset,
 )
 from app.theme_service import resolve_theme
-from app.image_service import attach_images_to_lessons
 from app.cefr_service import (
     choose_best_grammar_target,
     choose_best_target_from_text,
@@ -109,7 +109,8 @@ async def rewrite_reading_text_if_needed(
     current_text = lesson.reading_text
     has_rewrite = False
 
-    for attempt in range(4):
+    # The final iteration checks the fifth rewrite without requesting a sixth.
+    for attempt in range(LESSON_MAX_ATTEMPTS + 1):
         current_word_count = count_words(current_text)
         if minimum_words <= current_word_count <= maximum_words and (not force or has_rewrite):
             if force or current_text != lesson.reading_text:
@@ -119,9 +120,9 @@ async def rewrite_reading_text_if_needed(
             lesson.reading_text = current_text
             return lesson
 
-        if attempt == 3:
+        if attempt == LESSON_MAX_ATTEMPTS:
             raise LessonQualityError(
-                f"Reading repair failed for '{lesson.title}' after 3 attempts: "
+                f"Reading repair failed for '{lesson.title}' after {LESSON_MAX_ATTEMPTS} attempts: "
                 f"{current_word_count} words, expected {minimum_words}-{maximum_words}."
             )
 
@@ -434,7 +435,7 @@ def ensure_visual_activities(
 async def repair_lesson_consistency(
     lesson: LessonVariant, level: str, theme: str, duration: int, options: LessonAdvancedOptions,
 ) -> LessonVariant:
-    for round_index in range(3):
+    for round_index in range(LESSON_MAX_ATTEMPTS):
         try:
             if options.include_worksheet_assets and not lesson.worksheet_assets:
                 ensure_worksheet_assets([lesson], options)
@@ -451,9 +452,9 @@ async def repair_lesson_consistency(
 
         if not issues:
             return lesson
-        if round_index == 2:
+        if round_index + 1 == LESSON_MAX_ATTEMPTS:
             details = "; ".join(f"{issue.section}: {issue.message}" for issue in issues)
-            raise LessonQualityError(f"Lesson consistency checks failed for '{lesson.title}': {details}")
+            raise LessonQualityError(f"Lesson consistency checks failed for '{lesson.title}' after {LESSON_MAX_ATTEMPTS} attempts: {details}")
 
         feedback_by_section = {
             section: "\n".join(issue.message for issue in issues if issue.section == section)
@@ -668,12 +669,15 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         request.duration,
         options,
     )
-    if options.include_images:
-        lessons = await attach_images_to_lessons(lessons)
-    else:
-        for lesson in lessons:
-            lesson.images = []
-            lesson.primary_image = None
+    # Text is ready first. Pictures are generated separately for a saved lesson.
+    for lesson in lessons:
+        lesson.images = []
+        lesson.primary_image = None
+        lesson.image_requested = options.include_images
+        lesson.visual_activity = None
+        lesson.worksheet_assets = [asset for asset in lesson.worksheet_assets if asset.asset_type not in (
+            "reading_illustration", "find_in_picture", "label_the_picture",
+        )]
     lessons = prepare_lessons_for_frontend(
         lessons=lessons,
         level=cefr_profile["level"],
@@ -696,7 +700,7 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
 async def generate_lesson_variants(request: LessonGenerateRequest) -> LessonGenerateResponse:
     last_error = None
 
-    for attempt in range(3):
+    for attempt in range(LESSON_MAX_ATTEMPTS):
         try:
             return await try_generate_once(request)
         except (LessonQualityError, OllamaError):
@@ -704,4 +708,4 @@ async def generate_lesson_variants(request: LessonGenerateRequest) -> LessonGene
         except Exception as e:
             last_error = e
 
-    raise ValueError(f"Generation failed after 3 attempts. Last error: {str(last_error)}")
+    raise ValueError(f"Generation failed after {LESSON_MAX_ATTEMPTS} attempts. Last error: {str(last_error)}")

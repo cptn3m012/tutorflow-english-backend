@@ -108,6 +108,10 @@ class LessonImage(BaseModel):
     creator: Optional[str] = None
     license: Optional[str] = None
     license_version: Optional[str] = None
+    asset_id: Optional[str] = None
+    model: Optional[str] = None
+    seed: Optional[int] = None
+    style: Optional[str] = None
 
 
 class LessonVisualActivity(BaseModel):
@@ -116,7 +120,12 @@ class LessonVisualActivity(BaseModel):
     instruction: str
     scene_prompt: str
     target_words: List[str] = Field(default_factory=list)
+    visible_objects: List[str] = Field(default_factory=list)
+    sentence_frames: List[str] = Field(default_factory=list)
     answer_key: List[str] = Field(default_factory=list)
+    asset_id: Optional[str] = None
+    verified: bool = False
+    questions: List[dict] = Field(default_factory=list)
 
 
 class LessonWorksheetAsset(BaseModel):
@@ -165,6 +174,7 @@ class LessonVariant(BaseModel):
 
     image_search_query: Optional[str] = None
     image_keywords: List[str] = Field(default_factory=list)
+    image_requested: bool = False
     images: List[LessonImage] = Field(default_factory=list)
     primary_image: Optional[LessonImage] = None
     visual_activity: Optional[LessonVisualActivity] = None

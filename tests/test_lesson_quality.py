@@ -10,7 +10,7 @@ from app.main import app
 from app.quality_service import review_lesson_quality
 from app.schemas import LessonAdvancedOptions, LessonQualityIssue, ReadingQuestionAnswer
 from app.worksheet_service import repair_cloze_asset, validate_cloze_asset
-from tests.helpers import COMPREHENSION, READING, make_lesson
+from tests.helpers import COMPREHENSION, COMPREHENSION_SELECTION, READING, make_lesson
 
 
 def answered_lesson(**updates):
@@ -34,7 +34,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    side_effect=reviews) as review_generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)) as question_generate, \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)) as question_generate, \
              patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock) as reading_generate:
             await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
         reading_generate.assert_not_awaited()
@@ -50,7 +50,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         options = LessonAdvancedOptions(include_visual_activity=False)
         ensure_worksheet_assets([lesson], options)
         rewritten = READING.replace("Anna", "Maria")
-        updated_answers = json.dumps(COMPREHENSION).replace("Anna", "Maria")
+        updated_answers = json.dumps(COMPREHENSION_SELECTION).replace("Anna", "Maria")
         with patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock,
                    side_effect=[[LessonQualityIssue(section="reading", message="Repair the passage content.")], []]), \
              patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
@@ -95,7 +95,7 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value=READING) as reading_generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)), \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)), \
              patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock, return_value=[]) as review:
             await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
         self.assertEqual(reading_generate.await_count, 1)
@@ -111,15 +111,44 @@ class QualityReviewTests(unittest.IsolatedAsyncioTestCase):
              patch("app.lesson_service.generate_reading_comprehension", new_callable=AsyncMock) as repair:
             with self.assertRaisesRegex(LessonQualityError, "consistency checks failed"):
                 await repair_lesson_consistency(lesson, "A2", "cafe", 30, options)
-        self.assertEqual(review.await_count, 3)
-        self.assertEqual(repair.await_count, 2)
+        self.assertEqual(review.await_count, 5)
+        self.assertEqual(repair.await_count, 4)
 
     async def test_missing_review_verdict_never_counts_as_approval(self):
         with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value="{}") as generate:
             with self.assertRaisesRegex(LessonQualityError, "valid quality review"):
                 await review_lesson_quality(answered_lesson(), "A2")
-        self.assertEqual(generate.await_count, 3)
+        self.assertEqual(generate.await_count, 5)
+
+    async def test_fifth_review_and_consistency_round_can_succeed(self):
+        lesson = answered_lesson()
+        with patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=['{}'] * 4 + ['{"issues": []}']) as generate:
+            self.assertEqual(await review_lesson_quality(lesson, "A2"), [])
+        self.assertEqual(generate.await_count, 5)
+        issue = LessonQualityIssue(section="comprehension", message="Repair the answer.")
+        with patch("app.lesson_service.review_lesson_quality", new_callable=AsyncMock,
+                   side_effect=[[issue]] * 4 + [[]]) as review, \
+             patch("app.lesson_service.generate_reading_comprehension", new_callable=AsyncMock) as repair:
+            result = await repair_lesson_consistency(lesson, "A2", "cafe", 30,
+                         LessonAdvancedOptions(include_worksheet_assets=False, include_visual_activity=False))
+        self.assertIs(result, lesson)
+        self.assertEqual(review.await_count, 5)
+        self.assertEqual(repair.await_count, 4)
+
+    async def test_cloze_fifth_attempt_succeeds_and_invalid_exercise_is_bounded(self):
+        valid = {"lines": ["After breakfast, she asks for the ____ and pays with her card."],
+                 "word_bank": ["bill"], "answer_key": ["bill"]}
+        with patch("app.worksheet_service.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=['{}'] * 4 + [json.dumps(valid)]) as generate:
+            result = await repair_cloze_asset(answered_lesson(), "Fix the exercise.")
+        self.assertEqual(generate.await_count, 5)
+        self.assertEqual(result.answer_key, ["bill"])
+        with patch("app.worksheet_service.generate_from_ollama", new_callable=AsyncMock, return_value='{}') as generate:
+            with self.assertRaisesRegex(LessonQualityError, "after 5 attempts"):
+                await repair_cloze_asset(answered_lesson(), "Fix the exercise.")
+        self.assertEqual(generate.await_count, 5)
 
     async def test_disabled_worksheets_are_excluded_from_review_and_repair(self):
         lesson = answered_lesson()
@@ -163,7 +192,7 @@ class GenerationIntegrationTests(unittest.TestCase):
         async def questions(prompt, **kwargs):
             events.append("questions")
             self.assertIn(READING, prompt)
-            return json.dumps(COMPREHENSION)
+            return json.dumps(COMPREHENSION_SELECTION)
         async def review(prompt, **kwargs):
             events.append("review")
             self.assertIn('"answer": "Tea and a sandwich."', prompt)
@@ -183,14 +212,16 @@ class GenerationIntegrationTests(unittest.TestCase):
         self.assertEqual(lesson["reading_text"], READING)
         self.assertEqual(lesson["reading_questions"], [item["question"] for item in COMPREHENSION["items"]])
         self.assertEqual(lesson["reading_answers"], COMPREHENSION["items"])
-        self.assertEqual(len(lesson["worksheet_assets"]), 5)
+        self.assertEqual([asset["asset_type"] for asset in lesson["worksheet_assets"]], ["fill_in_the_blanks", "mini_dialogue"])
+        self.assertIsNone(lesson["visual_activity"])
+        self.assertEqual(lesson["images"], [])
 
     def test_quality_failure_does_not_restart_api_draft_generation(self):
         draft = make_lesson().model_dump()
         with patch("app.lesson_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value=json.dumps({"lessons": [draft]})) as generate, \
              patch("app.reading_service.generate_from_ollama", new_callable=AsyncMock,
-                   return_value=json.dumps(COMPREHENSION)), \
+                   return_value=json.dumps(COMPREHENSION_SELECTION)), \
              patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock,
                    return_value="{}"), TestClient(app) as client:
             response = client.post("/lessons/generate", json={

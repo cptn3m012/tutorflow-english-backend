@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import ValidationError
 from app.schemas import CefrProfile, LessonGenerateRequest, LessonGenerateResponse
 from app.lesson_service import generate_lesson_variants
@@ -102,7 +103,7 @@ async def get_pdf_options_endpoint():
 async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request: Request):
     slots = http_request.app.state.generation_slots
     if slots.locked():
-        raise HTTPException(status_code=429, detail="A lesson is already being generated. Please wait and try again.", headers={"Retry-After": "30"})
+        raise HTTPException(status_code=429, detail="The local model is preparing a lesson or picture. Please wait and try again.", headers={"Retry-After": "30"})
     try:
         async with slots:
             return await generate_lesson_variants(request)
@@ -118,7 +119,7 @@ async def build_pdf_response(request: Request, disposition: str):
     try:
         payload = await request.json()
         response, pdf_options = parse_lesson_pdf_payload(payload)
-        pdf_bytes = build_lesson_pdf(response, pdf_options)
+        pdf_bytes = await run_in_threadpool(build_lesson_pdf, response, pdf_options)
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=e.errors())
     except ValueError as e:
