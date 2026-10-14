@@ -101,6 +101,6 @@ class FrontendFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except HTTPException as error:
-            if error.status_code == 404 and (path in ("studio", "library") or self.is_lesson_page(path)):
+            if error.status_code == 404 and (path in ("studio", "library", "help") or self.is_lesson_page(path)):
                 return await super().get_response("index.html", scope)
             raise

@@ -109,3 +109,11 @@ class PicturePdfTests(unittest.TestCase):
         pdf = self.build(include_images=False)
         self.assertNotIn(b"/DCTDecode", pdf)
         self.assertIn(pdf_literal("1. What color is the cup?"), pdf)
+
+    def test_stale_activity_is_not_restored_from_image_metadata_after_a_text_edit(self):
+        self.lesson["picture_context_stale"] = True
+        self.lesson["visual_activity"] = None
+        pdf = self.build(teacher=True)
+        self.assertIn(self.path.read_bytes(), pdf)
+        self.assertNotIn(pdf_literal("1. What color is the cup?"), pdf)
+        self.assertNotIn(pdf_literal("Answer: It is blue."), pdf)

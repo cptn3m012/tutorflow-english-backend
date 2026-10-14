@@ -2,14 +2,22 @@ from datetime import UTC
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import delete, func, select
+from copy import deepcopy
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import PictureJobRecord, SavedLessonRecord
-from app.saved_lesson_schemas import FavoriteUpdate, SavedLesson, SavedLessonPage, SavedLessonWrite
+from starlette.concurrency import run_in_threadpool
+
+from app.lesson_editing import content_token, edit_content, regenerate_content
+from app.models import ACTIVE_PICTURE_STATES, PictureJobRecord, SavedLessonRecord
+from app.ollama_client import OllamaError
+from app.saved_lesson_schemas import (
+    FavoriteUpdate, LessonContentUpdate, LessonSectionRegenerate, SavedLesson, SavedLessonPage, SavedLessonWrite,
+)
 
 router = APIRouter(prefix="/lessons/saved", tags=["Saved lessons"])
 DatabaseSession = Annotated[Session, Depends(get_session)]
@@ -20,7 +28,7 @@ def to_lesson(record: SavedLessonRecord) -> SavedLesson:
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     return SavedLesson(
-        id=record.id, saved_at=timestamp, favorite=record.favorite,
+        id=record.id, saved_at=timestamp, favorite=record.favorite, content_token=content_token(record),
         level=record.level, duration=record.duration, theme=record.theme,
         mode=record.mode, lesson=record.lesson,
     )
@@ -31,6 +39,40 @@ def find_lesson(session: Session, lesson_id: UUID, *, allow_draft: bool = False)
     if record is None or (record.is_draft and not allow_draft):
         raise HTTPException(status_code=404, detail="Saved lesson not found.")
     return record
+
+
+def editable_record(session: Session, lesson_id: UUID, expected_token: str):
+    record = find_lesson(session, lesson_id)
+    if content_token(record) != expected_token:
+        raise HTTPException(409, "This lesson changed in another tab. Reload it before saving your changes.")
+    if session.scalar(select(PictureJobRecord.id).where(
+            PictureJobRecord.lesson_id == str(lesson_id), PictureJobRecord.status.in_(ACTIVE_PICTURE_STATES)).limit(1)):
+        raise HTTPException(409, "Wait for the current picture job to finish before editing this lesson.")
+    return record
+
+
+def read_edit_snapshot(engine, lesson_id: UUID, expected_token: str):
+    with Session(engine) as session:
+        record = editable_record(session, lesson_id, expected_token)
+        return {"lesson": deepcopy(record.lesson), "level": record.level,
+                "duration": record.duration, "theme": record.theme}
+
+
+def publish_edit(engine, lesson_id: UUID, expected_token: str, snapshot: dict, content: dict):
+    with Session(engine) as session:
+        editable_record(session, lesson_id, expected_token)
+        # Compare-and-swap also protects SQLite and simultaneous backend processes.
+        result = session.execute(update(SavedLessonRecord).where(
+            SavedLessonRecord.id == str(lesson_id), SavedLessonRecord.is_draft.is_(False),
+            SavedLessonRecord.lesson == snapshot["lesson"], SavedLessonRecord.level == snapshot["level"],
+            SavedLessonRecord.duration == snapshot["duration"], SavedLessonRecord.theme == snapshot["theme"],
+        ).values(lesson=content).execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            session.rollback()
+            raise HTTPException(409, "This lesson changed while the section was being prepared. Reload it and try again.")
+        session.commit()
+        session.expire_all()
+        return to_lesson(find_lesson(session, lesson_id))
 
 
 @router.get("", response_model=SavedLessonPage)
@@ -98,6 +140,37 @@ def update_favorite(lesson_id: UUID, payload: FavoriteUpdate, session: DatabaseS
     session.commit()
     session.refresh(record)
     return to_lesson(record)
+
+
+@router.patch("/{lesson_id}/content", response_model=SavedLesson)
+async def edit_saved_lesson(lesson_id: UUID, payload: LessonContentUpdate, request: Request, session: DatabaseSession):
+    engine = session.get_bind()
+    async with request.app.state.picture_job_lock:
+        snapshot = await run_in_threadpool(read_edit_snapshot, engine, lesson_id, payload.expected_token)
+        try:
+            content = edit_content(snapshot["lesson"], payload.changes.model_dump(mode="json", exclude_unset=True))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return await run_in_threadpool(publish_edit, engine, lesson_id, payload.expected_token, snapshot, content)
+
+
+@router.post("/{lesson_id}/regenerate", response_model=SavedLesson)
+async def regenerate_saved_section(lesson_id: UUID, payload: LessonSectionRegenerate, request: Request, session: DatabaseSession):
+    engine = session.get_bind()
+    snapshot = await run_in_threadpool(read_edit_snapshot, engine, lesson_id, payload.expected_token)
+    slots = request.app.state.generation_slots
+    if slots.locked():
+        raise HTTPException(429, "The local model is busy. Please wait and try again.", headers={"Retry-After": "30"})
+    try:
+        async with slots:
+            content = await regenerate_content(snapshot["lesson"], snapshot["level"], snapshot["theme"],
+                                               snapshot["duration"], payload.section, payload.instructions)
+            async with request.app.state.picture_job_lock:
+                return await run_in_threadpool(publish_edit, engine, lesson_id, payload.expected_token, snapshot, content)
+    except OllamaError as error:
+        raise HTTPException(503, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @router.delete("/{lesson_id}", status_code=204)
