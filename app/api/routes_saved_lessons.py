@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.models import PictureJobRecord, SavedLessonRecord
-from app.saved_lesson_schemas import FavoriteUpdate, SavedLesson, SavedLessonPage
+from app.saved_lesson_schemas import FavoriteUpdate, SavedLesson, SavedLessonPage, SavedLessonWrite
 
 router = APIRouter(prefix="/lessons/saved", tags=["Saved lessons"])
 DatabaseSession = Annotated[Session, Depends(get_session)]
@@ -55,7 +55,7 @@ def get_saved_lesson(lesson_id: UUID, session: DatabaseSession):
 
 
 @router.put("/{lesson_id}", response_model=SavedLesson)
-def save_lesson(lesson_id: UUID, payload: SavedLesson, session: DatabaseSession):
+def save_lesson(lesson_id: UUID, payload: SavedLessonWrite, session: DatabaseSession):
     """Idempotent create for saves, browser imports and undo. Never overwrite a save."""
     if lesson_id != payload.id:
         raise HTTPException(status_code=422, detail="Path ID must match the saved lesson ID.")
@@ -75,7 +75,7 @@ def save_lesson(lesson_id: UUID, payload: SavedLesson, session: DatabaseSession)
     record = SavedLessonRecord(
         id=str(payload.id), saved_at=timestamp, favorite=payload.favorite,
         level=payload.level, duration=payload.duration, theme=payload.theme,
-        mode=payload.mode, lesson=payload.lesson.model_dump(mode="json"),
+        mode=payload.mode, lesson=payload.lesson.model_dump(mode="json", exclude_unset=True),
     )
     session.add(record)
     try:
