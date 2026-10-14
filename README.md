@@ -294,6 +294,13 @@ is idempotent and PUT can restore a deleted record. Browser imports use the same
 UUIDs, so repeating an import creates no duplicates. Database failures return 503
 without including connection credentials in the response.
 
+New saves and picture drafts validate required text, known optional sections,
+reading answer order and quoted evidence, picture version links, and any embedded
+level, duration or theme against the saved metadata. Invalid payloads return 422
+before changing the database. Older lessons without answer keys or picture sections,
+demo CEFR descriptions, and unknown extension fields remain supported. Existing
+records remain readable without a data migration.
+
 Back up PostgreSQL with `pg_dump` or pgAdmin's Backup action. Store backups outside
 Git and test restoration before relying on them. For SQLite, stop the backend
 before copying its database file.

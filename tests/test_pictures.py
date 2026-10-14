@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -82,6 +83,18 @@ class PictureTests(unittest.TestCase):
     def test_draft_creation_validates_content_and_path_id(self):
         self.assertEqual(self.client.put(f"/lessons/picture-drafts/{uuid4()}", json=self.payload).status_code, 422)
         self.assertEqual(self.client.put(f"/lessons/picture-drafts/{self.lesson_id}", json={}).status_code, 422)
+
+    def test_draft_rejects_invalid_lesson_content_before_insertion(self):
+        for updates in ({"reading_text": "   "}, {"reading_answers": "bad type"},
+                        {"visual_activity": {"questions": [{}]}}, {"level": "C2"}):
+            with self.subTest(updates=updates):
+                payload = deepcopy(self.payload)
+                payload["id"] = str(uuid4())
+                payload["lesson"].update(updates)
+                url = f"/lessons/picture-drafts/{payload['id']}"
+                self.assertEqual(self.client.put(url, json=payload).status_code, 422)
+                self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(self.client.get("/lessons/saved").json()["total"], 1)
 
     def test_api_does_not_accept_workflows_paths_prompts_or_unknown_styles(self):
         for body in ({"workflow": {}}, {"path": "../../.env"}, {"prompt": "anything"}, {"style": "unknown"}):

@@ -15,13 +15,13 @@ from app.config import ImageSettings
 from app.models import ACTIVE_PICTURE_STATES, LessonImageRecord, PictureJobRecord, SavedLessonRecord
 from app.picture_schemas import PictureJob, PictureRequest
 from app.picture_storage import image_path
-from app.saved_lesson_schemas import SavedLesson
+from app.saved_lesson_schemas import SavedLesson, SavedLessonWrite
 
 router = APIRouter(tags=["Lesson pictures"])
 
 
 @router.put("/lessons/picture-drafts/{lesson_id}", response_model=SavedLesson)
-def prepare_picture_draft(lesson_id: UUID, payload: SavedLesson, session: DatabaseSession):
+def prepare_picture_draft(lesson_id: UUID, payload: SavedLessonWrite, session: DatabaseSession):
     if lesson_id != payload.id:
         raise HTTPException(422, "Path ID must match the working lesson ID.")
     if not ImageSettings.from_environment().enabled:
@@ -32,7 +32,7 @@ def prepare_picture_draft(lesson_id: UUID, payload: SavedLesson, session: Databa
     record = SavedLessonRecord(
         id=str(lesson_id), saved_at=payload.saved_at, favorite=False, is_draft=True,
         level=payload.level, duration=payload.duration, theme=payload.theme,
-        mode=payload.mode, lesson=payload.lesson.model_dump(mode="json"),
+        mode=payload.mode, lesson=payload.lesson.model_dump(mode="json", exclude_unset=True),
     )
     session.add(record)
     try:
