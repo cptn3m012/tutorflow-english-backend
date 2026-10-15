@@ -63,7 +63,8 @@ def attach_picture(engine, job: dict, content: bytes, metadata: dict, settings: 
         metadata = {**metadata, "visual_activity": visual}
         session.add(LessonImageRecord(id=asset_id, lesson_id=lesson.id, created_at=datetime.now(UTC), metadata_json=metadata))
         content_json = dict(lesson.lesson)
-        content_json.update(images=[image], primary_image=image, visual_activity=visual, image_requested=True)
+        content_json.update(images=[image], primary_image=image, visual_activity=visual, image_requested=True,
+                            picture_context_stale=False)
         content_json["worksheet_assets"] = [asset for asset in content_json.get("worksheet_assets", [])
                                             if asset.get("asset_type") not in ("reading_illustration", "find_in_picture", "label_the_picture")]
         lesson.lesson = content_json

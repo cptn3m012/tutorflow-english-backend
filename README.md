@@ -258,6 +258,8 @@ http://127.0.0.1:8000/redoc
 | `GET` | `/lessons/saved/{uuid}` | Read a saved lesson |
 | `PUT` | `/lessons/saved/{uuid}` | Save/import/restore a lesson with an independent UUID |
 | `PATCH` | `/lessons/saved/{uuid}` | Set favourite state with `{ "favorite": true }` |
+| `PATCH` | `/lessons/saved/{uuid}/content` | Edit selected lesson fields with `expected_token` and `changes` |
+| `POST` | `/lessons/saved/{uuid}/regenerate` | Regenerate one section with `expected_token`, `section` and optional `instructions` |
 | `DELETE` | `/lessons/saved/{uuid}` | Delete a saved lesson |
 
 ## Shared lesson database
@@ -300,6 +302,17 @@ level, duration or theme against the saved metadata. Invalid payloads return 422
 before changing the database. Older lessons without answer keys or picture sections,
 demo CEFR descriptions, and unknown extension fields remain supported. Existing
 records remain readable without a data migration.
+
+Saved lesson responses include `content_token`. Supply the latest token when editing
+or regenerating to protect against concurrent changes (409); favourite changes do
+not invalidate the token. Supported sections are `overview`, `vocabulary`, `reading`,
+`comprehension`, `speaking`, `activities` and `sentence_frames`. Regeneration shares
+the local GPU capacity limit (429) and publishes its result atomically after validation.
+Failures leave the saved content intact. Text edits are available without Ollama.
+Editing a reading clears its old questions, answers and reading exercises; regenerating
+it rebuilds questions, answers and existing cloze exercises. Changed reading, vocabulary
+or goals mark related picture activities stale while retaining the image. Generate a
+new picture to prepare a matching activity. Active picture jobs block text changes (409).
 
 Back up PostgreSQL with `pg_dump` or pgAdmin's Backup action. Store backups outside
 Git and test restoration before relying on them. For SQLite, stop the backend

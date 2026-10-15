@@ -175,6 +175,7 @@ class LessonVariant(BaseModel):
     image_search_query: Optional[str] = None
     image_keywords: List[str] = Field(default_factory=list)
     image_requested: bool = False
+    picture_context_stale: bool = False
     images: List[LessonImage] = Field(default_factory=list)
     primary_image: Optional[LessonImage] = None
     visual_activity: Optional[LessonVisualActivity] = None

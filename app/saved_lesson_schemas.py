@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.reading_service import validate_reading_comprehension
 from app.schemas import (
-    LessonImage, LessonVariant, LessonVisualActivity, LessonWorksheetAsset, NonEmptyText,
+    LessonImage, LessonVariant, LessonVisualActivity, LessonWorksheetAsset, NonEmptyText, ReadingQuestionAnswer,
 )
 
 
@@ -29,6 +29,7 @@ class SavedLesson(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     saved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     favorite: bool = False
+    content_token: str | None = None
     level: Literal["A1", "A2", "B1", "B2", "C1", "C2"]
     duration: int = Field(ge=1, le=180)
     theme: str = Field(min_length=1, max_length=500)
@@ -153,3 +154,39 @@ class SavedLessonPage(BaseModel):
 class FavoriteUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     favorite: bool
+
+
+EditableSection = Literal["overview", "vocabulary", "reading", "comprehension", "speaking", "activities", "sentence_frames"]
+
+
+class LessonContentChanges(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: NonEmptyText | None = Field(default=None, max_length=300)
+    lesson_goal: NonEmptyText | None = None
+    target_vocabulary: list[NonEmptyText] | None = Field(default=None, min_length=1, max_length=16)
+    reading_text: NonEmptyText | None = None
+    reading_questions: list[NonEmptyText] | None = Field(default=None, min_length=1, max_length=8)
+    reading_answers: list[ReadingQuestionAnswer] | None = None
+    speaking_questions: list[NonEmptyText] | None = Field(default=None, min_length=1, max_length=12)
+    pair_work_task: NonEmptyText | None = None
+    role_play_scenario: NonEmptyText | None = None
+    sentence_frames: list[NonEmptyText] | None = Field(default=None, min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_changes(self):
+        if not self.model_fields_set or any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("Supply at least one non-null lesson field to edit.")
+        return self
+
+
+class LessonContentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    changes: LessonContentChanges
+
+
+class LessonSectionRegenerate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    section: EditableSection
+    instructions: str = Field(default="", max_length=600)

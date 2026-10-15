@@ -618,7 +618,8 @@ def load_picture_assets(response: LessonGenerateResponse, options: PdfExportOpti
             record = session.get(LessonImageRecord, asset_id)
             if record is None or session.get(SavedLessonRecord, record.lesson_id) is None:
                 raise ValueError("A lesson picture is unavailable. Open the saved lesson and try again.")
-            lesson.visual_activity = LessonVisualActivity.model_validate(record.metadata_json["visual_activity"])
+            if not getattr(lesson, "picture_context_stale", False):
+                lesson.visual_activity = LessonVisualActivity.model_validate(record.metadata_json["visual_activity"])
         if options.include_images:
             assets[asset_id] = image_data_url(asset_id)
     return assets

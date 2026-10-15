@@ -96,7 +96,7 @@ class SharingTests(unittest.TestCase):
             (dist / "index.html").write_text("<html>TutorFlow test</html>", encoding="utf-8")
             application = create_app(AppSettings(frontend_dist=dist))
             with TestClient(application) as client:
-                for path in ("/", "/studio", "/library", "/lessons/9ae5c8b1-b5d0-4e12-8ea8-a2f2b4c87d94"):
+                for path in ("/", "/studio", "/library", "/help", "/lessons/9ae5c8b1-b5d0-4e12-8ea8-a2f2b4c87d94"):
                     response = client.get(path)
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertIn("TutorFlow test", response.text)
