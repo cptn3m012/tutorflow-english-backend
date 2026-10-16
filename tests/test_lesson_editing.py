@@ -73,7 +73,7 @@ class LessonEditingApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.url).json(), updated)
 
     def test_reading_edit_invalidates_only_linked_sections_without_model_calls(self):
-        with patch("app.lesson_editing.generate_from_ollama", new_callable=AsyncMock) as model:
+        with patch("app.lesson_sections.generate_from_ollama", new_callable=AsyncMock) as model:
             response = self.edit({"reading_text": "Anna visits a cafe and orders tea."})
         self.assertEqual(response.status_code, 200, response.text)
         content = response.json()["lesson"]
@@ -126,6 +126,19 @@ class LessonEditingApiTests(unittest.TestCase):
         self.app.state.generation_slots = asyncio.Semaphore(0)
         self.assertEqual(self.regenerate().status_code, 429)
 
+    def test_cefr_review_failure_does_not_publish_generated_content(self):
+        questions = [f"Critically evaluate complex theory {number}." for number in range(5)]
+        verdict = '{"issues": [{"section": "speaking", "message": "Use familiar routine communication for A2."}]}'
+        with patch("app.lesson_sections.generate_from_ollama", new_callable=AsyncMock,
+                   return_value=json.dumps({"speaking_questions": questions})), \
+             patch("app.quality_service.generate_from_ollama", new_callable=AsyncMock, return_value=verdict) as review:
+            response = self.regenerate()
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("familiar routine communication", response.json()["detail"])
+        self.assertEqual(review.await_count, 5)
+        self.assertEqual(self.client.get(self.url).json(), self.saved)
+        self.assertFalse(self.app.state.generation_slots.locked())
+
     def test_edit_during_regeneration_is_not_overwritten(self):
         async def other_teacher(*args):
             with Session(self.engine) as session:
@@ -153,8 +166,9 @@ class SectionRegenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_speaking_uses_bounded_section_schema_and_keeps_reading(self):
         original = answered_lesson().model_dump()
         questions = [f"What would you order at cafe number {number}?" for number in range(5)]
-        with patch("app.lesson_editing.generate_from_ollama", new_callable=AsyncMock,
-                   side_effect=["{}", json.dumps({"speaking_questions": questions})]) as generate:
+        with patch("app.lesson_sections.generate_from_ollama", new_callable=AsyncMock,
+                   side_effect=["{}", json.dumps({"speaking_questions": questions})]) as generate, \
+             patch("app.lesson_editing.review_lesson_quality", new_callable=AsyncMock, return_value=[]):
             result = await regenerate_content(original, "A2", "Cafe", 30, "speaking", "Use cafe situations.")
         self.assertEqual(result, {**original, "speaking_questions": questions})
         self.assertEqual(generate.await_count, 2)

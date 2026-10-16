@@ -22,7 +22,7 @@ class ReadingComprehension(BaseModel):
 class LessonQualityIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    section: Literal["reading", "comprehension", "cloze"]
+    section: Literal["overview", "vocabulary", "reading", "comprehension", "speaking", "activities", "sentence_frames", "cloze"]
     message: NonEmptyText
 
 

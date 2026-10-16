@@ -563,6 +563,30 @@ http://127.0.0.1:8000/docs
 
 ## Current Status
 
+New lesson quality reviews use the complete selected CEFR teaching profile and check
+the goal, vocabulary, reading, comprehension, speaking, pair work/role-play, sentence
+frames and cloze exercises. Concrete issues trigger bounded repairs of the affected
+section, followed by another review. The selected communication and grammar targets
+must be practised in the learner tasks, rather than only listed as metadata.
+
+Section regeneration, reading repair and question generation receive the same full
+profile. Regeneration reviews only the requested section and its linked dependencies;
+it preserves unrelated sections and publishes nothing when the review fails. Manual
+edits remain teacher-controlled and do not call the model.
+
+Grammar fallback cues require a progressive verb after `am/is/are` or `was/were`;
+copular sentences such as “She is a teacher” are not treated as Continuous. Missing
+grammar evidence requires an explicit target rather than silently choosing the first
+entry. A1 modal targets now distinguish `can/can't` from the auxiliary `do`; older
+focus labels remain readable and normalize to the corrected label when generated.
+
+Profiles are teaching references, not certification. CEFR describes communicative
+competence through [can-do descriptors](https://www.coe.int/en/web/common-european-framework-reference-languages/level-descriptions).
+Earlier-level language remains valid at higher levels; a word count or single tense
+does not establish a lesson's CEFR level. Automated checks depend on the configured
+model and still require teacher review. Existing saved lessons are not re-reviewed
+or changed automatically.
+
 Run the regression and API integration tests without contacting Ollama or image providers:
 
 ```bash
