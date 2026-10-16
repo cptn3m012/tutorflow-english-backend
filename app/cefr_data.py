@@ -43,7 +43,7 @@ CEFR_LEVELS = {
             "Imperatives",
             "Present continuous (now or in progress)",
             "Prepositions of place",
-            "Modals: can, can't, do, doesn't",
+            "Modals: can, can't",
             "Simple adjectives",
             "Comparatives and superlatives",
         ],

@@ -6,6 +6,7 @@ from app.generation_policy import LESSON_MAX_ATTEMPTS
 from app.generation_schemas import build_lesson_draft_schema
 from app.reading_service import generate_reading_comprehension, validate_reading_comprehension
 from app.quality_service import review_lesson_quality
+from app.lesson_sections import GENERATED_SECTIONS, replace_text_section
 from app.worksheet_service import build_fill_in_the_blanks_asset, repair_cloze_asset, validate_cloze_asset
 from app.prompts import build_lesson_prompt, build_reading_rewrite_prompt
 from app.ollama_client import OllamaError, generate_from_ollama
@@ -244,6 +245,8 @@ def normalize_lessons_content(lessons: list[LessonVariant], level: str) -> list[
             category_targets["grammar"],
             grammar_text,
         )
+        if not lesson.grammar_focus:
+            raise ValueError("Choose an explicit grammar_focus from the supplied profile; no reliable grammar cue was found.")
         lesson.cefr_focus = [
             lesson.communication_focus,
             lesson.vocabulary_focus,
@@ -458,7 +461,7 @@ async def repair_lesson_consistency(
 
         feedback_by_section = {
             section: "\n".join(issue.message for issue in issues if issue.section == section)
-            for section in ("reading", "comprehension", "cloze")
+            for section in ("reading", "comprehension", "cloze", *GENERATED_SECTIONS)
         }
         if feedback_by_section["reading"]:
             await rewrite_reading_text_if_needed(
@@ -478,6 +481,15 @@ async def repair_lesson_consistency(
                 repaired_asset if asset.asset_type == "fill_in_the_blanks" else asset
                 for asset in lesson.worksheet_assets
             ]
+        for section in GENERATED_SECTIONS:
+            if feedback_by_section[section]:
+                await replace_text_section(lesson, level, theme, section, feedback_by_section[section])
+                if section == "vocabulary":
+                    # Rebuild reading exercises from the new word list on the next review round.
+                    lesson.worksheet_assets = []
+                elif section == "sentence_frames":
+                    lesson.worksheet_assets = [build_mini_dialogue_asset(lesson) if asset.asset_type == "mini_dialogue"
+                                               else asset for asset in lesson.worksheet_assets]
 
     raise AssertionError("Unreachable quality review state")
 
