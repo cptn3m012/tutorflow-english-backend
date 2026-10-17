@@ -53,6 +53,8 @@ async def get_advanced_options_endpoint():
 @router.get("/pdf-options")
 async def get_pdf_options_endpoint():
     return {
+        "content": {"type": "select", "default": "lesson", "options": ["lesson", "quiz"]},
+        "include_exit_quiz": {"type": "boolean", "default": True},
         "template": {
             "type": "select",
             "default": "clean",

@@ -15,6 +15,8 @@ from starlette.concurrency import run_in_threadpool
 from app.lesson_editing import content_token, edit_content, regenerate_content
 from app.models import ACTIVE_PICTURE_STATES, PictureJobRecord, SavedLessonRecord
 from app.ollama_client import OllamaError
+from app.quiz_schemas import QuizGenerateRequest
+from app.quiz_service import generate_exit_quiz, quiz_is_stale
 from app.saved_lesson_schemas import (
     FavoriteUpdate, LessonContentUpdate, LessonSectionRegenerate, SavedLesson, SavedLessonPage, SavedLessonWrite,
 )
@@ -27,10 +29,13 @@ def to_lesson(record: SavedLessonRecord) -> SavedLesson:
     timestamp = record.saved_at
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
+    content = deepcopy(record.lesson)
+    if content.get("exit_quiz"):
+        content["exit_quiz_stale"] = quiz_is_stale(content, record.level)
     return SavedLesson(
         id=record.id, saved_at=timestamp, favorite=record.favorite, content_token=content_token(record),
         level=record.level, duration=record.duration, theme=record.theme,
-        mode=record.mode, lesson=record.lesson,
+        mode=record.mode, lesson=content,
     )
 
 
@@ -165,6 +170,25 @@ async def regenerate_saved_section(lesson_id: UUID, payload: LessonSectionRegene
         async with slots:
             content = await regenerate_content(snapshot["lesson"], snapshot["level"], snapshot["theme"],
                                                snapshot["duration"], payload.section, payload.instructions)
+            async with request.app.state.picture_job_lock:
+                return await run_in_threadpool(publish_edit, engine, lesson_id, payload.expected_token, snapshot, content)
+    except OllamaError as error:
+        raise HTTPException(503, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@router.post("/{lesson_id}/quiz", response_model=SavedLesson)
+async def prepare_exit_quiz(lesson_id: UUID, payload: QuizGenerateRequest, request: Request, session: DatabaseSession):
+    engine = session.get_bind()
+    snapshot = await run_in_threadpool(read_edit_snapshot, engine, lesson_id, payload.expected_token)
+    slots = request.app.state.generation_slots
+    if slots.locked():
+        raise HTTPException(429, "The local model is busy. Please wait and try again.", headers={"Retry-After": "30"})
+    try:
+        async with slots:
+            quiz = await generate_exit_quiz(snapshot["lesson"], snapshot["level"], payload.question_count)
+            content = {**snapshot["lesson"], "exit_quiz": quiz.model_dump(mode="json"), "exit_quiz_stale": False}
             async with request.app.state.picture_job_lock:
                 return await run_in_threadpool(publish_edit, engine, lesson_id, payload.expected_token, snapshot, content)
     except OllamaError as error:
