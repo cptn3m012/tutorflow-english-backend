@@ -143,6 +143,8 @@ class SavedLessonWrite(SavedLesson):
             raise ValueError("Saved duration must match the lesson duration.")
         if self.lesson.theme is not None and self.lesson.theme != self.theme:
             raise ValueError("Saved theme must match the lesson theme.")
+        if self.lesson.exit_quiz and self.lesson.exit_quiz.level != self.level:
+            raise ValueError("Exit quiz level must match the saved lesson level.")
         return self
 
 

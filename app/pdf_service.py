@@ -22,6 +22,7 @@ from app.schemas import (
 from app.database import get_engine
 from app.models import LessonImageRecord, SavedLessonRecord
 from app.picture_storage import image_data_url
+from app.quiz_service import quiz_is_stale
 
 
 A4_WIDTH = 595
@@ -75,6 +76,10 @@ def parse_lesson_pdf_payload(payload: Any) -> tuple[LessonGenerateResponse, PdfE
     for lesson in response.lessons:
         if lesson.reading_answers:
             validate_reading_comprehension(lesson, len(lesson.reading_questions))
+        if lesson.exit_quiz:
+            lesson.exit_quiz_stale = quiz_is_stale(lesson.model_dump(), lesson.level or lesson.exit_quiz.level)
+        if options.content == "quiz" and (not lesson.exit_quiz or lesson.exit_quiz_stale):
+            raise ValueError("Generate an up-to-date exit quiz before exporting it.")
     return response, options
 
 
@@ -99,7 +104,8 @@ def coerce_lesson_pdf_payload(payload: Any) -> LessonGenerateResponse:
     else:
         raise ValueError("PDF export payload must be a lesson, a lessons array, or a generated lesson response.")
 
-    lessons = [LessonVariant.model_validate(item) for item in lessons_payload]
+    lessons = [LessonVariant.model_validate({**item, "cefr_focus": [item["cefr_focus"]]}
+               if isinstance(item.get("cefr_focus"), str) else item) for item in lessons_payload]
     if not lessons:
         raise ValueError("PDF export payload does not contain any lessons.")
 
@@ -222,8 +228,10 @@ class PdfDocument:
         line_height = max(int((size + 4) * self.spacing_scale), size + 2, 10)
         gap = self.scale_gap(gap)
         width = max_width or (self.page_width - (self.margin_x * 2) - indent)
-        max_chars = max(18, int(width / (size * 0.48)))
-        lines = wrap(normalize_text(value), width=max_chars, break_long_words=False) or [""]
+        # Courier is monospaced and wider than the proportional-font estimate.
+        character_width = 0.6 if self.font_regular_base == "Courier" else 0.48
+        max_chars = max(18, int(width / (size * character_width)))
+        lines = wrap(normalize_text(value), width=max_chars, break_long_words=True) or [""]
 
         self.ensure_space(line_height * len(lines) + gap)
 
@@ -505,6 +513,41 @@ def add_reading_answer_key(doc: PdfDocument, lesson: LessonVariant):
         doc.text(f"Evidence: {item.evidence}", size=9, indent=16, gap=8, color=MUTED_COLOR)
 
 
+def add_exit_quiz(doc: PdfDocument, lesson: LessonVariant, *, standalone: bool = False):
+    quiz = lesson.exit_quiz
+    if not quiz or quiz_is_stale(lesson.model_dump(), lesson.level or quiz.level):
+        if standalone:
+            raise ValueError("Generate an up-to-date exit quiz before exporting it.")
+        return
+    doc.ensure_space(140)
+    doc.text(quiz.title, size=20 if standalone else 15, bold=True, color=doc.accent_color, gap=8)
+    doc.text(f"Exit quiz | CEFR {quiz.level} | {len(quiz.questions)} questions", size=10, color=MUTED_COLOR, gap=8)
+    if standalone:
+        doc.text(lesson.title, size=11, bold=True, gap=8)
+        doc.text("Name: __________________________    Date: ______________", size=10, gap=12)
+    doc.text(quiz.instruction, size=10, gap=10)
+    for index, item in enumerate(quiz.questions, start=1):
+        doc.ensure_space(140 if item.kind == "multiple_choice" else 100)
+        doc.text(f"{index}. {item.question}", size=11, bold=True, gap=5)
+        for letter, option in zip("ABCD", item.options):
+            doc.text(f"{letter}. {option}", size=10, indent=12, gap=3)
+        if item.kind == "short_answer":
+            for _ in range(2):
+                doc.ensure_space(24)
+                doc.text("____________________________________________________________", size=10, gap=5, color=RULE_COLOR)
+        doc.spacer(8)
+    if doc.options.include_answers:
+        if standalone:
+            doc.add_page()
+        add_section(doc, 99, "Exit quiz answer key")
+        for index, item in enumerate(quiz.questions, start=1):
+            doc.ensure_space(90)
+            label = "Example answer" if item.kind == "short_answer" else "Answer"
+            doc.text(f"{index}. {label}: {item.answer}", size=10, bold=True, gap=4)
+            doc.text(f"Checks: {item.focus} - {item.target}", size=9, color=MUTED_COLOR, gap=3)
+            doc.text(item.explanation, size=10, gap=10)
+
+
 def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int, picture_assets: dict):
     doc.text(lesson.title, size=24, bold=True, gap=7)
     doc.text("English lesson", size=11, bold=True, gap=10, color=doc.accent_color)
@@ -590,6 +633,8 @@ def add_lesson(doc: PdfDocument, lesson: LessonVariant, index: int, picture_asse
 
     add_worksheet_assets(doc, lesson.worksheet_assets, worksheet_number)
     add_reading_answer_key(doc, lesson)
+    if doc.options.include_exit_quiz:
+        add_exit_quiz(doc, lesson)
 
     lesson_image = lesson.primary_image or (lesson.images[0] if lesson.images else None)
     if doc.options.include_images and lesson_image:
@@ -628,7 +673,7 @@ def load_picture_assets(response: LessonGenerateResponse, options: PdfExportOpti
 def build_lesson_pdf(response: LessonGenerateResponse, options: PdfExportOptions | None = None) -> bytes:
     options = options or PdfExportOptions()
     response = response.model_copy(deep=True)
-    picture_assets = load_picture_assets(response, options)
+    picture_assets = {} if options.content == "quiz" else load_picture_assets(response, options)
     doc = PdfDocument(options)
 
     if len(response.lessons) > 1:
@@ -655,9 +700,13 @@ def build_lesson_pdf(response: LessonGenerateResponse, options: PdfExportOptions
     for index, lesson in enumerate(response.lessons, start=1):
         if index > 1 or len(response.lessons) > 1:
             doc.add_page()
-        add_lesson(doc, lesson, index, picture_assets)
+        if options.content == "quiz":
+            add_exit_quiz(doc, lesson, standalone=True)
+        else:
+            add_lesson(doc, lesson, index, picture_assets)
 
-    doc.add_custom_images()
+    if options.content != "quiz":
+        doc.add_custom_images()
 
     return render_pdf(
         doc.pages,

@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from typing import Annotated, List, Literal, Optional
+from app.quiz_schemas import LessonExitQuiz
 
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -67,6 +68,8 @@ class LessonAdvancedOptions(BaseModel):
 
 
 class PdfExportOptions(BaseModel):
+    content: Literal["lesson", "quiz"] = "lesson"
+    include_exit_quiz: bool = True
     template: str = Field(default="clean", pattern="^(clean|compact|worksheet)$")
     font_size: str = Field(default="medium", pattern="^(small|medium|large)$")
     font_family: str = Field(default="helvetica", pattern="^(helvetica|times|courier)$")
@@ -171,6 +174,8 @@ class LessonVariant(BaseModel):
     vocabulary_focus: Optional[str] = None
     grammar_focus: Optional[str] = None
     cefr_focus: List[str] = Field(default_factory=list)
+    exit_quiz: Optional[LessonExitQuiz] = None
+    exit_quiz_stale: bool = False
 
     image_search_query: Optional[str] = None
     image_keywords: List[str] = Field(default_factory=list)

@@ -7,7 +7,7 @@ import httpx
 
 from app.config import OllamaSettings
 
-GenerationTask = Literal["lesson", "reading", "comprehension", "review", "cloze", "image_metadata"]
+GenerationTask = Literal["lesson", "reading", "comprehension", "review", "cloze", "quiz", "image_metadata"]
 
 # Budgets include reasoning tokens. The full draft needs space for three variants.
 TASK_OPTIONS = {
@@ -16,6 +16,7 @@ TASK_OPTIONS = {
     "comprehension": (0.0, 4096),
     "review": (0.0, 3072),
     "cloze": (0.0, 2048),
+    "quiz": (0.2, 4096),
     "image_metadata": (0.0, 2048),
 }
 SYSTEM_PROMPT = (

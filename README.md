@@ -260,6 +260,7 @@ http://127.0.0.1:8000/redoc
 | `PATCH` | `/lessons/saved/{uuid}` | Set favourite state with `{ "favorite": true }` |
 | `PATCH` | `/lessons/saved/{uuid}/content` | Edit selected lesson fields with `expected_token` and `changes` |
 | `POST` | `/lessons/saved/{uuid}/regenerate` | Regenerate one section with `expected_token`, `section` and optional `instructions` |
+| `POST` | `/lessons/saved/{uuid}/quiz` | Generate and save a checked exit quiz with `expected_token` and `question_count` (3-5) |
 | `DELETE` | `/lessons/saved/{uuid}` | Delete a saved lesson |
 
 ## Shared lesson database
@@ -561,7 +562,33 @@ Open API documentation:
 http://127.0.0.1:8000/docs
 ```
 
-## Current Status
+## Exit quizzes
+
+Use `POST /lessons/saved/{id}/quiz` with the current `expected_token` and an optional
+`question_count` from 3 to 5 (default 3). A quiz is generated separately for a saved
+lesson and contains vocabulary, grammar and communication checks, with multiple-choice
+items and a short communication task. It uses the selected CEFR profile, lesson goal,
+actual vocabulary and practised structures. Short-answer keys are examples with acceptance
+guidance; the application does not automatically grade free-text responses.
+
+Structural validation checks counts, coverage, distinct choices, the selected answer and
+vocabulary/grammar targets. A separate model review solves the questions and checks the
+key and ambiguity. Generation and review retries are bounded. The existing quiz stays
+saved on failure, model contention or a concurrent edit. Successful publication changes
+only the quiz on the same lesson record; no database migration is required.
+
+A fingerprint of the level and source lesson text marks the quiz stale after relevant
+edits or section regeneration. Picture/favourite changes do not invalidate it. Stale
+quizzes are hidden in Student view and omitted from full lesson PDFs. Standalone export
+rejects a missing or stale quiz even if the client supplies an incorrect stale flag.
+
+The normal PDF endpoints accept `pdf_options.content: "quiz"` for a separate handout;
+`include_answers` controls its key, which starts on a separate page. Full lesson export
+includes a current quiz by default; set `include_exit_quiz: false` to omit it. Legacy
+lessons without quizzes remain valid. Tests use controlled model responses, not a live
+benchmark of question quality.
+
+## Validation
 
 New lesson quality reviews use the complete selected CEFR teaching profile and check
 the goal, vocabulary, reading, comprehension, speaking, pair work/role-play, sentence
