@@ -251,6 +251,7 @@ http://127.0.0.1:8000/redoc
 | `GET` | `/lessons/cefr-levels/{level}` | Get details for a single CEFR level |
 | `GET` | `/lessons/advanced-options` | Get available lesson generation options |
 | `GET` | `/lessons/pdf-options` | Get available PDF export options |
+| `POST` | `/lessons/topics` | Suggest six topics for a course type, age group and CEFR level |
 | `POST` | `/lessons/generate` | Generate lesson variants |
 | `POST` | `/lessons/export/pdf` | Export lessons as a downloadable PDF |
 | `POST` | `/lessons/export/pdf/preview` | Preview lessons as an inline PDF |
@@ -262,6 +263,20 @@ http://127.0.0.1:8000/redoc
 | `POST` | `/lessons/saved/{uuid}/regenerate` | Regenerate one section with `expected_token`, `section` and optional `instructions` |
 | `POST` | `/lessons/saved/{uuid}/quiz` | Generate and save a checked exit quiz with `expected_token` and `question_count` (3-5) |
 | `DELETE` | `/lessons/saved/{uuid}` | Delete a saved lesson |
+
+## Choosing a lesson topic
+
+Post `{"english_type":"business","age_group":"adults","level":"B1","exclude_topics":[]}`
+to `/lessons/topics`. The local model returns six `{title, description}` topic choices.
+Send previous titles in `exclude_topics` (up to 12) to request different suggestions.
+This uses the same model queue as lesson and picture generation; a busy model returns 429.
+Unavailable models return 503; invalid suggestions return 502 without generating a lesson.
+
+Pass `english_type` (`general` or `business`) and `age_group` (`children`, `teens` or `adults`)
+with the chosen `topic` to `/lessons/generate`. Defaults are General English and adults
+for existing clients. Audience settings are stored on each lesson and used in generation,
+reading rewrites, section repairs and quality review. Business English for children uses
+school projects and pretend shops rather than adult workplace assumptions.
 
 ## Shared lesson database
 

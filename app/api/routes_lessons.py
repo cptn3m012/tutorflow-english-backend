@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 from pydantic import ValidationError
@@ -6,6 +8,9 @@ from app.lesson_service import generate_lesson_variants
 from app.ollama_client import OllamaError
 from app.cefr_service import get_cefr_profile, list_cefr_profiles
 from app.pdf_service import build_lesson_pdf, parse_lesson_pdf_payload
+
+from app.schemas import TopicSuggestionsRequest, TopicSuggestionsResponse
+from app.topic_service import suggest_topics
 
 router = APIRouter(prefix="/lessons", tags=["Lessons"])
 
@@ -101,6 +106,20 @@ async def get_pdf_options_endpoint():
     }
 
 
+@router.post("/topics", response_model=TopicSuggestionsResponse)
+async def suggest_topics_endpoint(request: TopicSuggestionsRequest, http_request: Request):
+    slots = http_request.app.state.generation_slots
+    if slots.locked():
+        raise HTTPException(status_code=429, detail="The local model is busy. Please wait and try again.", headers={"Retry-After": "30"})
+    try:
+        async with slots:
+            return await suggest_topics(request)
+    except OllamaError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail="Could not prepare six different topics. Please try again.") from error
+
+
 @router.post("/generate", response_model=LessonGenerateResponse)
 async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request: Request):
     slots = http_request.app.state.generation_slots
@@ -110,6 +129,7 @@ async def generate_lessons_endpoint(request: LessonGenerateRequest, http_request
         async with slots:
             return await generate_lesson_variants(request)
     except OllamaError as e:
+        logging.getLogger(__name__).warning("Lesson generation failed: %s", e)
         raise HTTPException(status_code=503, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))

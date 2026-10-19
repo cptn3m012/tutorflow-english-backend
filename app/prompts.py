@@ -3,6 +3,9 @@ import json
 from app.cefr_service import format_cefr_profile_for_prompt
 
 
+from app.audience import audience_guidance
+
+
 def build_lesson_prompt(
     level: str,
     topic: str,
@@ -19,6 +22,8 @@ def build_lesson_prompt(
     skill_focus: str = "speaking",
     lesson_style: str = "practical",
     extra_instructions: str | None = None,
+    english_type: str = "general",
+    age_group: str = "adults",
 ) -> str:
     visual_activity_schema = ""
     visual_activity_rules = "- do not include visual_activity"
@@ -51,6 +56,7 @@ You are an English lesson generator.
 
 Create exactly {variant_count} different English lesson variants for CEFR level {level}.
 Main theme: {topic}
+{audience_guidance(english_type, age_group)}
 Lesson duration: {duration} minutes
 Primary skill focus: {skill_focus}
 Lesson style: {lesson_style}{optional_extra_instructions}
@@ -225,6 +231,8 @@ def build_reading_rewrite_prompt(
     minimum_words: int,
     maximum_words: int,
     rewrite_feedback: str = "",
+    english_type: str = "general",
+    age_group: str = "adults",
 ) -> str:
     vocabulary_list = ", ".join(target_vocabulary)
     target_words = (minimum_words + maximum_words) // 2
@@ -232,6 +240,7 @@ def build_reading_rewrite_prompt(
 
     return f"""
 You rewrite one reading passage for an English lesson.
+{audience_guidance(english_type, age_group)}
 
 CEFR level: {level}
 Theme: {theme}
@@ -287,6 +296,7 @@ Return an empty issues list only when all supplied material passes these checks:
   Require accessible familiar tasks for beginners and suitable nuance and challenge for advanced learners.
   The profile is a teaching reference, not a universal exhaustive grammar syllabus.
 - overview: the goal is concrete and achievable within a lesson and matches the selected communication target.
+- Check teaching_context: all content and activities must fit the course type and age group; flag mismatches in the relevant section.
 - vocabulary: words fit the topic, level and selected vocabulary area; reject an unnecessarily specialist list for beginners.
 - speaking: questions are understandable at this level and elicit the selected communicative skill, not just unrelated discussion.
 - activities: pair work and role-play have clear learner actions and practise the selected communication target at this level.

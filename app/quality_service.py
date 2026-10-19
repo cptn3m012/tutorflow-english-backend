@@ -1,3 +1,4 @@
+from app.audience import audience_guidance
 from app.errors import LessonQualityError
 from app.cefr_service import get_cefr_profile
 from app.generation_policy import LESSON_MAX_ATTEMPTS
@@ -21,6 +22,7 @@ async def review_lesson_quality(
     reviewed_sections = available if sections is None else available & sections
     context = {
         "level": level,
+        "teaching_context": audience_guidance(lesson.english_type, lesson.age_group),
         "cefr_profile": get_cefr_profile(level),
         "review_sections": sorted(reviewed_sections),
         "title": lesson.title,
