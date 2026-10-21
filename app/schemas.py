@@ -86,7 +86,39 @@ class PdfExportOptions(BaseModel):
     custom_images: List[dict] = Field(default_factory=list)
 
 
-class LessonGenerateRequest(BaseModel):
+EnglishType = Literal["general", "business"]
+AgeGroup = Literal["children", "teens", "adults"]
+
+
+class LessonAudience(BaseModel):
+    english_type: EnglishType = "general"
+    age_group: AgeGroup = "adults"
+
+
+class TopicSuggestionsRequest(LessonAudience):
+    level: Literal["A1", "A2", "B1", "B2", "C1", "C2"]
+    exclude_topics: List[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]] = Field(default_factory=list, max_length=12)
+
+
+class SuggestedTopic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=100)]
+    description: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=300)]
+
+
+class TopicSuggestionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    topics: List[SuggestedTopic] = Field(min_length=6, max_length=6)
+
+    @model_validator(mode="after")
+    def distinct_topics(self):
+        titles = {" ".join(topic.title.split()).casefold() for topic in self.topics}
+        if len(titles) != len(self.topics):
+            raise ValueError("Suggest six distinct topics.")
+        return self
+
+
+class LessonGenerateRequest(LessonAudience):
     level: str = Field(..., example="A2")
     duration: int = Field(..., ge=15, le=180, example=30)
     topic: Optional[str] = Field(default=None, max_length=500, example="food")
@@ -153,7 +185,7 @@ class CefrProfile(BaseModel):
     grammar_targets: List[str]
 
 
-class LessonVariant(BaseModel):
+class LessonVariant(LessonAudience):
     id: Optional[str] = None
     level: Optional[str] = None
     duration_minutes: Optional[int] = None
@@ -188,7 +220,7 @@ class LessonVariant(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
-class LessonGenerateResponse(BaseModel):
+class LessonGenerateResponse(LessonAudience):
     requested_level: str
     lesson_theme: str
     duration_minutes: int

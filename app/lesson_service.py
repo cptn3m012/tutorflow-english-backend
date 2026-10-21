@@ -156,6 +156,8 @@ async def rewrite_reading_text_if_needed(
             minimum_words=minimum_words,
             maximum_words=maximum_words,
             rewrite_feedback=rewrite_feedback,
+            english_type=lesson.english_type,
+            age_group=lesson.age_group,
         )
         rewritten_text = (await generate_from_ollama(prompt, task="reading")).strip()
         cleaned_text = rewritten_text.strip().strip('"').strip()
@@ -641,6 +643,8 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         skill_focus=options.skill_focus,
         lesson_style=options.lesson_style,
         extra_instructions=options.extra_instructions,
+        english_type=request.english_type,
+        age_group=request.age_group,
     )
 
     raw_response = await generate_from_ollama(
@@ -658,6 +662,10 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
         raise ValueError("Model response does not contain 'lessons' field.")
 
     lessons = [LessonVariant.model_validate(item) for item in parsed_json["lessons"]]
+
+    for lesson in lessons:
+        lesson.english_type = request.english_type
+        lesson.age_group = request.age_group
 
     lessons = attach_lesson_context(lessons, cefr_profile["level"], final_theme, request.duration)
     lessons = normalize_lessons_content(lessons, cefr_profile["level"])
@@ -698,6 +706,8 @@ async def try_generate_once(request: LessonGenerateRequest) -> LessonGenerateRes
     )
 
     return LessonGenerateResponse(
+        english_type=request.english_type,
+        age_group=request.age_group,
         requested_level=cefr_profile["level"],
         lesson_theme=final_theme,
         duration_minutes=request.duration,
